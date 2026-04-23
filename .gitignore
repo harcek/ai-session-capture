@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Secrets and credentials — never commit
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+.netrc
+.pgpass
+credentials.json
+.secrets/
+.allow.txt
+
+# Raw session transcripts — these stay in ~/.claude/projects/, never here
+*.raw.jsonl
+
+# Tool state (lives in ~/.local/state/claude-session-capture/)
+state/
+*.lock
+cursor.json
+last-error
+run.log*
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Per-machine scratch / notes — not for publication
+untracked/
+TESTING.md
+*.local.md

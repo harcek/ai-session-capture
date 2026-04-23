@@ -1,0 +1,69 @@
+{% if frontmatter_enabled %}---
+session_id: {{ session_id }}
+session_id_short: {{ session_id_short }}
+project: {{ project }}
+{% if title %}title: {{ title }}
+{% endif %}started_at: {{ started_at }}
+ended_at: {{ ended_at }}
+turn_count: {{ turn_count }}
+{% if dates | length > 1 %}spans_dates: {{ dates | tojson }}
+{% endif %}{% if redactions.total %}redactions_total: {{ redactions.total }}
+redactions:
+{% for label, count in redactions.counts.items() | sort %}  {{ label }}: {{ count }}
+{% endfor %}{% endif %}tags:
+  - claude-session
+  - project/{{ project }}
+---
+
+{% endif %}
+# {% if title %}{{ title }}{% else %}Session `{{ session_id_short }}`{% endif %}
+
+**project** `{{ project }}` · **{{ turn_count }} turns** · **{{ started_at }} → {{ ended_at }}**
+{% if cwd %}**cwd** `{{ cwd }}`
+{% endif %}
+{% if redactions.total %}
+> ⚠️ **{{ redactions.total }} secret pattern(s) redacted in this session** ({{ redactions.counts_fmt }})
+>
+> Rotate the exposed credentials, audit the path that leaked them, and
+> substitute placeholders in future prompts.
+
+{% endif %}
+{% for turn in turns %}
+{% if turn.kind == "user" %}
+### [{{ turn.full_time }}] Q
+
+{{ turn.content }}
+
+{% if turn.tool_results_display %}
+{% for tr in turn.tool_results_display %}
+{% if tr.dropped %}
+- _tool result from `{{ tr.tool_name }}` dropped (sensitive)_
+{% else %}
+- **{{ tr.tool_name }}**{% if tr.is_error %} (error){% endif %}: `{{ tr.preview }}`
+{% endif %}
+{% endfor %}
+
+{% endif %}
+{% elif turn.kind == "assistant" %}
+### [{{ turn.full_time }}] A
+
+{{ turn.content }}
+
+{% if turn.tool_calls_display %}
+_tool calls:_
+{% for tc in turn.tool_calls_display %}- {{ tc }}
+{% endfor %}
+
+{% endif %}
+{% elif turn.kind == "slash_command" %}
+### [{{ turn.full_time }}] /slash
+
+```
+{{ turn.content }}
+```
+
+{% endif %}
+{% endfor %}
+{% if sidechain_count %}
+_{{ sidechain_count }} sidechain message(s) omitted — set `content.sidechain = "full"` in config.toml to include them._
+{% endif %}

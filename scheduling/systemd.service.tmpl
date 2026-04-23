@@ -1,0 +1,26 @@
+[Unit]
+Description=claude-session-capture daily run
+Documentation=https://github.com/harcek/claude-session-capture
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart={{SCRIPT_PATH}} daily
+Environment=LANG=en_US.UTF-8
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — the tool only reads ~/.claude and writes its own two dirs.
+# ProtectSystem=strict makes the root FS read-only; ProtectHome=read-only
+# gates most of $HOME, and ReadWritePaths carves out the exact dirs we
+# need to write. ReadOnlyPaths is redundant with ProtectHome here but
+# documents intent.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/claude-sessions %h/.local/state/claude-session-capture
+ReadOnlyPaths=%h/.claude
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true

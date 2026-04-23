@@ -1,0 +1,27 @@
+{% if frontmatter_enabled %}---
+date: {{ date }}
+sessions_count: {{ sessions | length }}
+turns_count: {{ turn_count }}
+projects:
+{% for p in projects %}  - {{ p }}
+{% endfor %}{% if redactions.total %}redactions_total: {{ redactions.total }}
+{% endif %}tags:
+  - claude-session-index
+{% for p in projects %}  - project/{{ p }}
+{% endfor %}---
+
+{% endif %}
+# {{ date }} — session index
+
+{% if redactions.total %}
+> ⚠️ **{{ redactions.total }} secret pattern(s) redacted across today's sessions** ({{ redactions.counts_fmt }})
+
+{% endif %}
+{% if sessions %}
+| Time | Project | Turns | Session |
+|------|---------|-------|---------|
+{% for s in sessions %}| {{ s.first_time }} | `{{ s.project }}` | {{ s.turn_count_today }} | [[{{ s.link_target }}\|{{ s.label }}]] |
+{% endfor %}
+{% else %}
+_No sessions touched this day._
+{% endif %}

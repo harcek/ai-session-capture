@@ -1,0 +1,73 @@
+# ai-session-capture — example config
+#
+# This file configures the Claude Code adapter (the
+# claude_session_capture Python package). Copy to
+# ~/.config/claude-session-capture/config.toml and edit — every
+# section is optional; omitted fields use the defaults shown here.
+
+# The Claude transcripts root is NOT configurable via TOML (see ADR-0004).
+# By default the tool reads from $CLAUDE_CONFIG_DIR/projects if set, else
+# from ~/.claude/projects. For one-off imports from an archive, pass
+# --projects-root PATH on the CLI. CLAUDE_PROJECTS_ROOT is a test/dev env
+# hook only — not intended for regular user config.
+
+[granularity]
+# "session+daily" (default): per-session MD files + a daily index file
+# that backlinks to sessions touching that day. Obsidian-native.
+# "session" = per-session only, no index.  "daily" = legacy (deprecated);
+# treated as session+daily with a deprecation warning.
+mode = "session+daily"
+
+[session_files]
+slug_max_words = 5         # words of first-prompt / custom-title in filenames
+slug_max_chars = 60        # hard cap on the slug portion
+project_name_max_len = 48  # cap on the project dir / prefix
+fallback_project = "_scratch"  # group for sessions without a real project (cwd=$HOME, /tmp, …)
+per_project_dirs = true    # sessions/<project>/<file>.md (vs. flat sessions/<file>.md)
+
+[projects.aliases]
+# Rename cwd-derived project names to something nicer. Key = derived
+# name (the last `--`-split segment of the Claude Code projects-dir
+# path), value = display name used for the folder + frontmatter.
+# home-openclaw = "_scratch"
+# tmp = "_scratch"
+# openclaw-workspace-projects-deep-value-scanner = "deep-value-scanner"
+
+[content]
+# "off" | "summary" | "full" — summary shows a one-line input preview for
+# calls / a one-line result preview for results.
+tool_calls   = "summary"
+tool_results = "summary"
+# Sidechain / sub-agent messages: default is summary (one-line count per
+# session). "off" hides entirely, "full" renders each sub-agent turn.
+sidechain    = "summary"
+# Local /slash command invocations (e.g. /rename) appear as turns.
+slash_commands = true
+
+[formatting]
+# Truncate individual messages at this many chars (0 = unlimited).
+max_message_chars = 8000
+
+[output]
+# Daily MDs land here. This is the data-repo path.
+dir = "~/.local/share/claude-sessions"
+
+[output.frontmatter]
+# YAML frontmatter atop each session + daily file (date, session count,
+# projects, tags, redaction counts). Obsidian-compatible. Set false to
+# emit pure-body Markdown.
+enabled = true
+
+[redaction]
+# Aggressive redaction is on by default. Turning this off is strongly
+# discouraged if the output dir is ever pushed anywhere.
+enabled = true
+
+[timezone]
+# "auto" uses the system TZ. "explicit" uses the `name` below.
+mode = "auto"
+name = "Europe/Prague"
+
+[logging]
+# "error" | "warn" | "info" | "debug"
+level = "info"

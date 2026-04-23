@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{LABEL}}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{SCRIPT_PATH}}</string>
+        <string>daily</string>
+    </array>
+
+    <!-- Fire at 06:00 local time (DST-aware). Missed triggers coalesce into
+         one catch-up fire on wake, so sleeping through the slot produces
+         at most one run. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>6</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <!-- RunAtLoad=false: launchd's own catch-up handles missed fires; we
+         don't want the agent running on every login on top of that. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>{{HOME}}/Library/Logs/claude-session-capture/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{HOME}}/Library/Logs/claude-session-capture/launchd.err.log</string>
+
+    <!-- launchd hands the job a minimal env; the tool doesn't need much,
+         but setting PATH and LANG avoids surprises inside subprocess calls
+         (osascript) and ensures UTF-8 in the rendered output. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>LANG</key><string>en_US.UTF-8</string>
+    </dict>
+
+    <!-- Lower scheduling priority — this is maintenance, not interactive. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

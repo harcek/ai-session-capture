@@ -1,0 +1,86 @@
+{% if frontmatter_enabled %}---
+date: {{ date }}
+sessions: {{ sessions | length }}
+turns: {{ turn_count }}
+projects:
+{% for p in projects %}  - {{ p }}
+{% endfor %}
+{% if redactions.total %}redactions_total: {{ redactions.total }}
+redactions:
+{% for label, count in redactions.counts.items() | sort %}  {{ label }}: {{ count }}
+{% endfor %}
+{% endif %}tags:
+  - claude-session
+{% for p in projects %}  - project/{{ p }}
+{% endfor %}---
+
+{% endif %}
+# {{ date }} — Claude Code sessions
+
+{% if redactions.total %}
+> ⚠️ **Security warning — {{ redactions.total }} secret pattern(s) redacted today** ({{ redactions.counts_fmt }})
+>
+> You should not have credentials, keys, tokens, or other secrets in your
+> Claude Code sessions in the first place. This tool redacts them as a
+> defense-in-depth measure, but every hit here represents a habit worth
+> fixing:
+>
+> 1. **Rotate** the exposed secret immediately — assume it's burned.
+> 2. **Audit** how it reached the session (`cat .env`? pasted inline?
+>    echoed by a tool?) and close that path.
+> 3. **Substitute** placeholder values in prompts and let the session look
+>    up the real thing at run time from an env var or secret store you
+>    don't read through Claude.
+
+{% endif %}
+{% if sessions %}
+{% for session in sessions %}
+## Session `{{ session.id_short }}` — {{ session.project }} — started {{ session.started_at }}
+
+{% if session.cwd %}**cwd:** `{{ session.cwd }}`
+{% endif %}**turns:** {{ session.turns | length }}{% if session.sidechain_count %} (plus {{ session.sidechain_count }} sidechain){% endif %}
+
+{% for turn in session.turns %}
+{% if turn.kind == "user" %}
+### [{{ turn.time }}] Q
+
+{{ turn.content }}
+
+{% if turn.tool_results_display %}
+{% for tr in turn.tool_results_display %}
+{% if tr.dropped %}
+- _tool result from `{{ tr.tool_name }}` dropped (sensitive)_
+{% else %}
+- **{{ tr.tool_name }}**{% if tr.is_error %} (error){% endif %}: `{{ tr.preview }}`
+{% endif %}
+{% endfor %}
+
+{% endif %}
+{% elif turn.kind == "assistant" %}
+### [{{ turn.time }}] A
+
+{{ turn.content }}
+
+{% if turn.tool_calls_display %}
+_tool calls:_
+{% for tc in turn.tool_calls_display %}- {{ tc }}
+{% endfor %}
+
+{% endif %}
+{% elif turn.kind == "slash_command" %}
+### [{{ turn.time }}] /slash
+
+```
+{{ turn.content }}
+```
+
+{% endif %}
+{% endfor %}
+{% if session.sidechain_count %}
+_{{ session.sidechain_count }} sidechain message(s) omitted — set `content.sidechain = "full"` in config.toml to include them._
+
+{% endif %}
+{% endfor %}
+{% else %}
+_No sessions captured for this date._
+{% endif %}

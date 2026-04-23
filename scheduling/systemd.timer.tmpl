@@ -1,0 +1,16 @@
+[Unit]
+Description=Fire claude-session-capture daily at 06:00 local
+
+[Timer]
+# OnCalendar uses local TZ by default (DST-aware).
+OnCalendar=*-*-* 06:00:00
+
+# Persistent=true means missed triggers while the machine was off fire
+# exactly once on boot/resume — matches cron-style "yesterday once"
+# semantics.
+Persistent=true
+AccuracySec=1min
+Unit=claude-session-capture.service
+
+[Install]
+WantedBy=timers.target
