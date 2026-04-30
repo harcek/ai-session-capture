@@ -14,6 +14,7 @@ from claude_session_capture.codex_parser import (
     iter_codex_jsonls,
     parse_codex_file,
 )
+from tests.conftest import write_jsonl
 
 
 @pytest.fixture
@@ -25,14 +26,27 @@ def fake_codex_root(tmp_path, monkeypatch):
     return root
 
 
-def write_codex(path: Path, lines: list[dict]) -> Path:
-    """Serialize a synthetic Codex rollout JSONL."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for d in lines:
-            f.write(json.dumps(d) + "\n")
-    os.chmod(path, 0o600)
-    return path
+@pytest.fixture(autouse=True)
+def _reset_csc_logger():
+    """Other tests (`test_state`) call ``setup_logging`` which sets
+    ``propagate=False`` on the ``csc`` logger. Once that's set, pytest's
+    ``caplog`` (which hooks the root logger) can't capture anything.
+    Reset before every test in this file so caplog-based assertions
+    work regardless of test ordering.
+    """
+    import logging
+    csc = logging.getLogger("csc")
+    saved_handlers = list(csc.handlers)
+    saved_propagate = csc.propagate
+    csc.handlers.clear()
+    csc.propagate = True
+    yield
+    csc.handlers = saved_handlers
+    csc.propagate = saved_propagate
+
+
+# Reuses write_jsonl from conftest — same output (one dict per line, mode 0600).
+write_codex = write_jsonl
 
 
 def _meta(session_id="s1", cwd="/home/u/proj"):
@@ -425,3 +439,203 @@ def test_default_codex_root_precedence(tmp_path, monkeypatch):
 
     monkeypatch.delenv("CODEX_HOME")
     assert default_codex_root() == Path("~/.codex/sessions").expanduser().resolve()
+
+
+# --- edge cases surfaced by the post-commit review --------------------
+
+
+def test_uuid_unique_within_same_timestamp(fake_codex_root):
+    """Multiple records sharing a timestamp must each get a distinct uuid."""
+    same_ts = "2026-04-22T10:00:00.000Z"
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(session_id="s1"),
+            _user_msg("first", ts=same_ts),
+            _assistant_msg("response", ts=same_ts),
+            _user_msg("second", ts=same_ts),
+        ],
+    )
+    records = list(parse_codex_file(jsonl))
+    uuids = [r.uuid for r in records]
+    assert len(uuids) == len(set(uuids)), f"uuid collision: {uuids}"
+
+
+def test_reasoning_attaches_to_buffered_assistant(fake_codex_root):
+    """`reasoning` records populate the assistant record's thinking list
+    BEFORE the assistant record is yielded — no late mutation."""
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            _user_msg("ask"),
+            _assistant_msg("thinking out loud"),
+            {
+                "type": "response_item",
+                "timestamp": "2026-04-22T10:00:02.500Z",
+                "payload": {
+                    "type": "reasoning",
+                    "summary": ["step 1: consider X", "step 2: consider Y"],
+                    "content": None,
+                    "encrypted_content": None,
+                },
+            },
+            _user_msg("next"),
+        ],
+    )
+    records = list(parse_codex_file(jsonl))
+    assistant = next(r for r in records if r.kind == "assistant")
+    assert assistant.thinking == ["step 1: consider X", "step 2: consider Y"]
+
+
+def test_developer_role_skipped(fake_codex_root):
+    """response_item.message,role=developer is system-prompt-ish; skip."""
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            {
+                "type": "response_item",
+                "timestamp": "2026-04-22T10:00:00.000Z",
+                "payload": {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": "system instruction"}],
+                },
+            },
+            _user_msg("real prompt"),
+        ],
+    )
+    records = list(parse_codex_file(jsonl))
+    assert len(records) == 1
+    assert records[0].kind == "user"
+    assert "system instruction" not in records[0].content
+
+
+def test_orphan_function_call_dropped(fake_codex_root, caplog):
+    """A function_call without a preceding assistant must be dropped + logged."""
+    import logging
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            _user_msg("hi"),
+            # function_call before any assistant — orphan
+            _function_call("exec_command", {"cmd": "ls"}, call_id="orphan-1"),
+            _assistant_msg("response"),
+        ],
+    )
+    with caplog.at_level(logging.DEBUG, logger="csc"):
+        records = list(parse_codex_file(jsonl))
+    assert all(not r.tool_calls for r in records)
+    assert any("orphan function_call" in r.message for r in caplog.records)
+
+
+def test_orphan_function_call_output_dropped(fake_codex_root, caplog):
+    """A function_call_output without a registered call_id is dropped + logged."""
+    import logging
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            _user_msg("hi"),
+            _assistant_msg("response"),
+            # output references unknown call_id
+            _function_output("some output", call_id="never-registered"),
+            _user_msg("next"),
+        ],
+    )
+    with caplog.at_level(logging.DEBUG, logger="csc"):
+        records = list(parse_codex_file(jsonl))
+    # No tool_results should land on the second user record
+    last_user = [r for r in records if r.kind == "user"][-1]
+    assert last_user.tool_results == []
+    assert any("orphan function_call_output" in r.message for r in caplog.records)
+
+
+def test_eof_with_unattached_results_logs_only(fake_codex_root, caplog):
+    """Pending tool_results at EOF (no trailing user) are dropped + logged."""
+    import logging
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            _user_msg("hi"),
+            _assistant_msg("doing it"),
+            _function_call("exec_command", {"cmd": "ls"}),
+            _function_output("file1\nfile2"),
+            # no trailing user message — session ended after tool ran
+        ],
+    )
+    with caplog.at_level(logging.DEBUG, logger="csc"):
+        records = list(parse_codex_file(jsonl))
+    # Assistant still yielded, tool_calls attached
+    assert any(r.kind == "assistant" and r.tool_calls for r in records)
+    # No leftover user record fabricated
+    assert sum(r.kind == "user" for r in records) == 1
+    assert any("unattached tool_result" in r.message for r in caplog.records)
+
+
+def test_payload_missing_or_non_dict_skipped(fake_codex_root):
+    """Records with missing or non-dict payload don't crash the parser."""
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            {"type": "response_item", "timestamp": "2026-04-22T10:00:00Z"},  # no payload
+            {
+                "type": "response_item",
+                "timestamp": "2026-04-22T10:00:01Z",
+                "payload": ["not", "a", "dict"],
+            },
+            _user_msg("real prompt"),
+        ],
+    )
+    records = list(parse_codex_file(jsonl))
+    assert len(records) == 1
+    assert records[0].content == "real prompt"
+
+
+def test_empty_session_meta_yields_no_meta(fake_codex_root):
+    """A session_meta with no `id` field doesn't create a SessionMeta entry."""
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            {"type": "session_meta", "timestamp": "2026-04-22T10:00:00Z", "payload": {}},
+            _user_msg("hi"),
+        ],
+    )
+    meta = collect_codex_meta(jsonl)
+    assert meta == {}
+
+
+def test_argv_list_command_form(fake_codex_root):
+    """A function_call with argv-list `cmd` joins to a string for redaction."""
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            _user_msg("show env"),
+            _assistant_msg("checking"),
+            # printenv with args is recognized by SENSITIVE_BASH (\b word
+            # boundary). The argv-list form must still be redacted.
+            _function_call("exec_command", {"cmd": ["printenv", "PATH"]}),
+            _function_output("/usr/bin:/usr/local/bin"),
+            _user_msg("ok"),
+        ],
+    )
+    records = list(parse_codex_file(jsonl))
+    asst = next(r for r in records if r.kind == "assistant")
+    assert asst.tool_calls[0]["input"]["command"] == "printenv PATH"
+    assert asst.tool_calls[0]["dropped"] is True
+    last_user = [r for r in records if r.kind == "user"][-1]
+    assert last_user.tool_results[0]["content"] == ""

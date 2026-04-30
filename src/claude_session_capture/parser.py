@@ -10,6 +10,7 @@ redaction in ``redact.py`` is a second line of defense, not the first.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Iterator
@@ -18,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 
 MAX_LINE_BYTES = 10 * 1024 * 1024  # 10 MiB; longer lines are skipped
+
+logger = logging.getLogger("csc")
 
 
 def default_projects_root() -> Path:
@@ -153,8 +156,12 @@ class SessionMeta:
     first_prompt: str | None = None
 
 
-def _assert_under_root(path: Path, root: Path) -> Path:
-    """Refuse to read JSONLs outside ``root`` (path-traversal + symlink guard)."""
+def assert_under_root(path: Path, root: Path) -> Path:
+    """Refuse to read JSONLs outside ``root`` (path-traversal + symlink guard).
+
+    Shared between adapters (Claude, Codex, …). Each adapter passes its
+    own root; the check is the same.
+    """
     resolved = path.resolve(strict=True)
     if not resolved.is_relative_to(root):
         raise ValueError(f"refusing to read JSONL outside {root}: {resolved}")
@@ -164,14 +171,25 @@ def _assert_under_root(path: Path, root: Path) -> Path:
     return resolved
 
 
+# Backwards-compat alias for the previously-private name.
+_assert_under_root = assert_under_root
+
+
 def iter_raw_lines(path: Path, root: Path | None = None) -> Iterator[dict]:
-    """Yield parsed JSON dicts line by line. Malformed lines skip silently."""
+    """Yield parsed JSON dicts line by line. Malformed lines skip silently.
+
+    Shared between adapters. ``root`` defaults to the Claude root; Codex
+    callers pass an explicit root.
+    """
     root = root or default_projects_root()
-    resolved = _assert_under_root(path, root)
+    resolved = assert_under_root(path, root)
     fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             if len(line) > MAX_LINE_BYTES:
+                logger.debug(
+                    "parser: skipping line >%d bytes in %s", MAX_LINE_BYTES, path
+                )
                 continue
             line = line.strip()
             if not line:
@@ -182,7 +200,12 @@ def iter_raw_lines(path: Path, root: Path | None = None) -> Iterator[dict]:
                 continue
 
 
-def _parse_ts(raw: dict) -> datetime | None:
+def parse_ts(raw: dict) -> datetime | None:
+    """Pull an ISO-8601 ``timestamp`` field off a raw record and parse it.
+
+    Shared between adapters; the Codex envelope and Claude record both
+    use ``timestamp`` with a ``Z``-suffixed ISO-8601 string.
+    """
     ts = raw.get("timestamp")
     if not ts:
         return None
@@ -190,6 +213,10 @@ def _parse_ts(raw: dict) -> datetime | None:
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return None
+
+
+# Backwards-compat alias.
+_parse_ts = parse_ts
 
 
 def _derive_project(jsonl_path: Path) -> str:

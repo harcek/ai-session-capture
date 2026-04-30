@@ -110,3 +110,56 @@ valuable:
 
 Removal policy: **either implement and test, or remove.** Never keep
 a documented config knob that does nothing.
+
+## Deferred from the Codex-parser /simplify pass (2026-04-23)
+
+Three review agents (reuse / quality / efficiency) ran against the
+Codex parser commit. Most findings were applied. The following were
+consciously deferred — each has a precondition that turns "speculative
+abstraction" into "obvious right shape":
+
+### `StrEnum` for envelope-type / payload-type / record-kind / record-source
+
+**Finding:** dispatch on bare strings (`if rtype == "session_meta"`,
+`if ptype == "function_call"`, `kind="user"`, `source="claude"`).
+Type-safety improvement.
+
+**Why deferred:** the v0.2.0 rename to `ai-session-capture` will
+reorganize parser modules and is the natural moment to introduce
+shared `RecordKind`, `RecordSource`, and per-adapter envelope enums.
+Doing it alongside the rename is one diff; doing it now would be a
+preliminary refactor that gets re-touched.
+
+### Table-driven dispatch in `parse_codex_file`
+
+**Finding:** the main loop nests up to 5 levels (for-line → if-rtype →
+if-ptype → if-isinstance(content) → for-block → if-btype). A
+`HANDLERS: dict[(rtype, ptype), Callable]` table would flatten it.
+
+**Why deferred:** the schema may shift once we factor a shared
+`adapter` interface during the rename. Worth waiting until the
+abstraction shape is clear rather than building a table-driven
+dispatch that the refactor invalidates.
+
+### `ToolCallTracker` extraction
+
+**Finding:** both `parser.py::_walk_content` and the Codex parser
+maintain a `tool_name_by_id: dict` + `dropped_ids: set` pair plus the
+sensitivity classification. Extractable into a small class.
+
+**Why deferred:** with only two consumers today, the abstraction is
+speculative. The third adapter (OpenCode) is on the BACKLOG and will
+arrive with different surrounding control flow. At three call sites
+the right shape will be obvious; today, premature.
+
+### `collect_codex_meta` re-reading the file
+
+**Finding:** in production flows that need both records and meta, two
+file passes happen (one for `parse_codex_file`, one for
+`collect_codex_meta`). Same pattern exists on the Claude side
+(`parse_file` + `collect_session_meta`).
+
+**Why deferred:** ``collect_codex_meta`` is currently called only from
+tests and as a meta-only convenience. The CLI wiring for v0.2.0 will
+build a combined parse-and-meta pass at integration time; addressing
+this before the wiring exists would shape the API around a non-issue.
