@@ -114,7 +114,13 @@ def is_sensitive_path(file_path: str) -> bool:
 
 @dataclass
 class Record:
-    """One normalized line from a JSONL transcript, downstream-ready."""
+    """One normalized line from a JSONL transcript, downstream-ready.
+
+    ``source`` discriminates between agent-tool adapters (claude / codex /
+    opencode / …). Defaults to "claude" for backwards-compat across any
+    pre-existing FTS rows or callers that don't specify a source.
+    See ADR-0005.
+    """
 
     session_id: str
     timestamp: datetime | None
@@ -129,6 +135,7 @@ class Record:
     tool_results: list[dict] = field(default_factory=list)
     thinking: list[str] = field(default_factory=list)
     raw_type: str = ""
+    source: str = "claude"
 
 
 @dataclass
