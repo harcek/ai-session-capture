@@ -126,6 +126,77 @@ def test_get_session_text_with_date_disambiguator(db):
     assert found["date"] == "2026-04-20"
 
 
+def test_search_sessions_source_filter(db):
+    """search_sessions accepts a `source` arg and routes it through to the index."""
+    # Add a codex-source row alongside the existing claude-source rows
+    S.upsert_rows([
+        S.SessionIndexRow(
+            id="codex-1", date="2026-04-20", project="alpha", cwd="",
+            first_ts="", turn_count=2, redactions_total=0,
+            content="rate limit issue in codex flow",
+            source="codex",
+        )
+    ], path=S.db_path())
+
+    union = json.loads(M.handle_search_sessions({"query": "rate"}))
+    sources_seen = {r["source"] for r in union["results"]}
+    assert "codex" in sources_seen
+    assert "claude" in sources_seen
+
+    only_codex = json.loads(
+        M.handle_search_sessions({"query": "rate", "source": "codex"})
+    )
+    assert all(r["source"] == "codex" for r in only_codex["results"])
+
+
+def test_list_recent_sessions_source_filter(db):
+    S.upsert_rows([
+        S.SessionIndexRow(
+            id="codex-r", date="2026-04-21", project="alpha", cwd="",
+            first_ts="2026-04-21T08:00:00", turn_count=1, redactions_total=0,
+            content="codex recent", source="codex",
+        )
+    ], path=S.db_path())
+    only_codex = json.loads(
+        M.handle_list_recent_sessions({"limit": 5, "source": "codex"})
+    )
+    assert all(r["source"] == "codex" for r in only_codex)
+
+
+def test_list_projects_source_filter(db):
+    S.upsert_rows([
+        S.SessionIndexRow(
+            id="codex-p", date="2026-04-21", project="codex-only-project", cwd="",
+            first_ts="", turn_count=1, redactions_total=0,
+            content="x", source="codex",
+        )
+    ], path=S.db_path())
+    only_codex = json.loads(M.handle_list_projects({"source": "codex"}))
+    project_names = {r["project"] for r in only_codex}
+    assert "codex-only-project" in project_names
+    # claude-only fixtures shouldn't appear when filtered to codex
+    assert "alpha" not in project_names or all(
+        r["source"] == "codex" for r in only_codex if r["project"] == "alpha"
+    )
+
+
+def test_get_session_text_source_filter(db):
+    """When same session id appears under two sources, source pins the lookup."""
+    S.upsert_rows([
+        S.SessionIndexRow(
+            id="dup-id", date="2026-04-20", project="p", cwd="",
+            first_ts="", turn_count=1, redactions_total=0,
+            content="codex side", source="codex",
+        )
+    ], path=S.db_path())
+    cx = json.loads(
+        M.handle_get_session_text({"session_id": "dup-id", "source": "codex"})
+    )
+    assert cx["found"] is True
+    assert cx["source"] == "codex"
+    assert cx["content"] == "codex side"
+
+
 def test_build_server_returns_mcp_server():
     """Smoke test that the runtime wiring doesn't crash on construction.
 

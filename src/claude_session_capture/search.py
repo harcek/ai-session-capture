@@ -92,27 +92,50 @@ def connect(path: Path | None = None):
     conn = sqlite3.connect(str(p))
     conn.row_factory = sqlite3.Row
     try:
-        # 1. Tables first — creates if missing, no-op on existing.
+        # 1. Tables — creates if missing, no-op on pre-existing.
         conn.executescript(_SCHEMA_TABLES)
-        # 2. Migrations — add columns to pre-existing legacy tables. Must
-        # run BEFORE indexes that reference the new column.
+        # 2. Add columns to legacy tables. Idempotent via duplicate-
+        # column catch; must run before indexes/PK-rebuild touch them.
         for stmt in _MIGRATIONS:
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError as e:
                 if "duplicate column" not in str(e).lower():
                     raise
-        # 3. Drop legacy sessions_fts if it exists without the new
-        # `source` column (FTS5 virtual tables can't be ALTERed; safe to
-        # rebuild because upsert paths re-populate from the structured
-        # `sessions` table on next run).
+        # 3. Primary-key migration. SQLite's ALTER TABLE ADD COLUMN does
+        # not update the PK, so a legacy table created with PK(id, date)
+        # still has that PK after we add `source`. Detect and rebuild
+        # the table preserving rows. ON CONFLICT(id, date, source)
+        # upserts depend on this.
+        pk_cols = [
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(sessions)").fetchall()
+            if r["pk"] > 0
+        ]
+        if pk_cols and "source" not in pk_cols:
+            existing = conn.execute(
+                "SELECT id, date, source, project, cwd, first_ts, "
+                "turn_count, redactions_total, content_hash, indexed_at "
+                "FROM sessions"
+            ).fetchall()
+            conn.execute("DROP TABLE sessions")
+            conn.executescript(_SCHEMA_TABLES)
+            if existing:
+                conn.executemany(
+                    "INSERT INTO sessions (id, date, source, project, cwd, "
+                    "first_ts, turn_count, redactions_total, content_hash, "
+                    "indexed_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    [tuple(r) for r in existing],
+                )
+        # 4. FTS5 virtual tables can't be ALTERed; if pre-source, drop
+        # and recreate (upsert paths repopulate on next run).
         cols = [
             r["name"]
             for r in conn.execute("PRAGMA table_info(sessions_fts)").fetchall()
         ]
         if cols and "source" not in cols:
             conn.execute("DROP TABLE sessions_fts")
-        # 4. Indexes + (re-)created FTS table.
+        # 5. Indexes + (re-)created FTS table.
         conn.executescript(_SCHEMA_INDEXES_AND_FTS)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")

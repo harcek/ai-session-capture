@@ -36,14 +36,20 @@ SERVER_NAME = "claude-session-capture"
 SERVER_VERSION = "0.2.0"
 
 
+_SOURCE_DESCRIPTION = (
+    "Optional adapter source filter — \"claude\", \"codex\", … . Omit "
+    "or set null to query across all sources."
+)
+
+
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
         "name": "search_sessions",
         "description": (
-            "Search the user's personal Claude Code session archive using "
-            "SQLite FTS5. Supports phrase queries (\"rate limiting\"), "
+            "Search the user's personal AI-coding-agent session archive "
+            "using SQLite FTS5. Supports phrase queries (\"rate limiting\"), "
             "AND/OR/NOT, and prefix wildcards (foo*). Returns matched "
-            "sessions with date, project, and a highlighted snippet."
+            "sessions with date, source, project, and a highlighted snippet."
         ),
         "inputSchema": {
             "type": "object",
@@ -55,6 +61,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "project": {
                     "type": "string",
                     "description": "Optional project name to filter by.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": _SOURCE_DESCRIPTION,
                 },
                 "since": {
                     "type": "string",
@@ -79,21 +89,33 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "name": "list_projects",
         "description": (
             "List distinct projects in the archive with session counts and "
-            "date ranges. Useful for discovering what's been captured."
+            "date ranges. Optionally filter by source."
         ),
-        "inputSchema": {"type": "object", "properties": {}},
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": _SOURCE_DESCRIPTION,
+                },
+            },
+        },
     },
     {
         "name": "list_recent_sessions",
         "description": (
             "List the most-recent captured sessions, newest first, optionally "
-            "filtered by project."
+            "filtered by project and/or source."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "limit": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100},
                 "project": {"type": "string"},
+                "source": {
+                    "type": "string",
+                    "description": _SOURCE_DESCRIPTION,
+                },
             },
         },
     },
@@ -101,7 +123,8 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "name": "get_session_text",
         "description": (
             "Retrieve the full redacted text of a specific session by id. "
-            "Pin to a date if the session spans multiple days."
+            "Pin to a date and/or source if the same session id might "
+            "appear under multiple sources."
         ),
         "inputSchema": {
             "type": "object",
@@ -110,6 +133,10 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "date": {
                     "type": "string",
                     "description": "Optional YYYY-MM-DD date disambiguator.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": _SOURCE_DESCRIPTION,
                 },
             },
             "required": ["session_id"],
@@ -131,6 +158,7 @@ def handle_search_sessions(args: dict) -> str:
         results = search_mod.search(
             args["query"],
             project=args.get("project"),
+            source=args.get("source"),
             since=_parse_date(args.get("since")),
             until=_parse_date(args.get("until")),
             # Pass raw — search._clamp_limit handles TypeError/ValueError
@@ -153,6 +181,7 @@ def handle_search_sessions(args: dict) -> str:
         {
             "session_id": r.session_id,
             "date": r.date,
+            "source": r.source,
             "project": r.project,
             "cwd": r.cwd,
             "first_ts": r.first_ts,
@@ -166,7 +195,7 @@ def handle_search_sessions(args: dict) -> str:
 
 
 def handle_list_projects(args: dict) -> str:
-    return json.dumps(search_mod.list_projects(), indent=2)
+    return json.dumps(search_mod.list_projects(source=args.get("source")), indent=2)
 
 
 def handle_list_recent_sessions(args: dict) -> str:
@@ -175,6 +204,7 @@ def handle_list_recent_sessions(args: dict) -> str:
             # Pass raw; list_recent → _clamp_limit handles coercion
             limit=args.get("limit", 10),
             project=args.get("project"),
+            source=args.get("source"),
         ),
         indent=2,
     )
@@ -184,6 +214,7 @@ def handle_get_session_text(args: dict) -> str:
     got = search_mod.get_session_text(
         args["session_id"],
         date_str=args.get("date"),
+        source=args.get("source"),
     )
     if got is None:
         return json.dumps({"found": False})

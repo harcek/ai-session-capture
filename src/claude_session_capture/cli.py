@@ -17,6 +17,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import search as search_mod
+from .codex_parser import (
+    collect_codex_meta,
+    default_codex_root,
+    iter_codex_jsonls,
+    parse_codex_file,
+)
 from .config import Config, default_config_path
 from .parser import (
     SessionMeta,
@@ -42,8 +48,13 @@ from .state import (
 )
 
 
+# Recognized values for the --source CLI flag.
+KNOWN_SOURCES = ("claude", "codex")
+SOURCE_ALL = "all"
+
+
 def _resolve_root(args) -> Path:
-    """Pick the projects root using the full precedence chain.
+    """Pick the Claude projects root.
 
     ``--projects-root`` CLI flag wins if provided; otherwise delegate to
     :func:`parser.default_projects_root` which handles the env var /
@@ -54,27 +65,71 @@ def _resolve_root(args) -> Path:
     return default_projects_root()
 
 
-def _load_all_records(logger: logging.Logger, root: Path) -> list:
-    """Parse every JSONL under ``root``; skip individual failures."""
-    records = []
-    for jsonl in iter_jsonls(root):
-        try:
-            records.extend(parse_file(jsonl, root=root))
-        except Exception as e:  # noqa: BLE001 — continue past one bad file
-            logger.warning("skipped %s: %s", jsonl, e)
+def _resolve_sources(args) -> tuple[str, ...]:
+    """Return the tuple of source names to ingest for this invocation.
+
+    Defaults to all known sources. ``--source X`` narrows to that one.
+    ``--source all`` is the explicit union form. Unknown values raise
+    via argparse `choices`.
+    """
+    raw = getattr(args, "source", None) or SOURCE_ALL
+    if raw == SOURCE_ALL:
+        return KNOWN_SOURCES
+    return (raw,)
+
+
+def _load_all_records(
+    logger: logging.Logger, args, sources: tuple[str, ...]
+) -> list:
+    """Parse every JSONL across the requested sources; skip individual failures.
+
+    Adapters with a missing root directory contribute zero records
+    (``iter_*_jsonls`` returns empty), so on a machine without Codex
+    installed, ``--source all`` quietly captures only Claude.
+    """
+    records: list = []
+
+    if "claude" in sources:
+        root = _resolve_root(args)
+        for jsonl in iter_jsonls(root):
+            try:
+                records.extend(parse_file(jsonl, root=root))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("skipped %s: %s", jsonl, e)
+
+    if "codex" in sources:
+        codex_root = default_codex_root()
+        for jsonl in iter_codex_jsonls(codex_root):
+            try:
+                records.extend(parse_codex_file(jsonl, root=codex_root))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("skipped %s: %s", jsonl, e)
+
     return records
 
 
 def _load_all_meta(
-    logger: logging.Logger, root: Path
+    logger: logging.Logger, args, sources: tuple[str, ...]
 ) -> dict[str, SessionMeta]:
-    """Fast second pass for session-level metadata across every JSONL."""
+    """Session-level metadata across the requested sources."""
     out: dict[str, SessionMeta] = {}
-    for jsonl in iter_jsonls(root):
-        try:
-            out.update(collect_session_meta(jsonl, root=root))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("meta-skipped %s: %s", jsonl, e)
+
+    if "claude" in sources:
+        root = _resolve_root(args)
+        for jsonl in iter_jsonls(root):
+            try:
+                out.update(collect_session_meta(jsonl, root=root))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("meta-skipped %s: %s", jsonl, e)
+
+    if "codex" in sources:
+        codex_root = default_codex_root()
+        for jsonl in iter_codex_jsonls(codex_root):
+            try:
+                out.update(collect_codex_meta(jsonl, root=codex_root))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("meta-skipped %s: %s", jsonl, e)
+
     return out
 
 
@@ -101,10 +156,10 @@ def _parse_date(value: str) -> date:
 def cmd_daily(args, cfg: Config, logger: logging.Logger) -> int:
     tz = resolve_tz(cfg)
     target = args.date or (datetime.now(tz).date() - timedelta(days=1))
-    root = _resolve_root(args)
+    sources = _resolve_sources(args)
 
-    records = _load_all_records(logger, root)
-    meta = _load_all_meta(logger, root)
+    records = _load_all_records(logger, args, sources)
+    meta = _load_all_meta(logger, args, sources)
 
     # Identify session IDs that had any turn on the target local-date.
     touching_ids = {
@@ -185,11 +240,11 @@ def cmd_daily(args, cfg: Config, logger: logging.Logger) -> int:
 
 def cmd_backfill(args, cfg: Config, logger: logging.Logger) -> int:
     tz = resolve_tz(cfg)
-    root = _resolve_root(args)
-    records = _load_all_records(logger, root)
-    meta = _load_all_meta(logger, root)
+    sources = _resolve_sources(args)
+    records = _load_all_records(logger, args, sources)
+    meta = _load_all_meta(logger, args, sources)
     if not records:
-        logger.warning("no records found under %s", root)
+        logger.warning("no records found for sources=%s", ",".join(sources))
         return 0
 
     renders_by_id = _render_all_sessions(records, meta, cfg, tz)
@@ -276,20 +331,30 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
     tz = resolve_tz(cfg)
 
     if args.rebuild:
-        root = _resolve_root(args)
-        records = _load_all_records(logger, root)
+        sources = _resolve_sources(args)
+        records = _load_all_records(logger, args, sources)
         n = search_mod.rebuild_all(records, cfg, tz)
-        logger.info("rebuilt index from scratch: %d sessions", n)
+        logger.info(
+            "rebuilt index from scratch: %d sessions across sources=%s",
+            n, ",".join(sources),
+        )
         return 0
 
     if not args.query:
         sys.stderr.write("error: search needs a QUERY or --rebuild\n")
         return 2
 
+    # For querying the index, --source narrows to a single adapter (or
+    # None = union). "all" maps to None.
+    source_filter = (
+        None if not args.source or args.source == SOURCE_ALL else args.source
+    )
+
     try:
         results = search_mod.search(
             args.query,
             project=args.project,
+            source=source_filter,
             since=args.since,
             until=args.until,
             limit=args.limit,
@@ -309,6 +374,7 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
             {
                 "session_id": r.session_id,
                 "date": r.date,
+                "source": r.source,
                 "project": r.project,
                 "cwd": r.cwd,
                 "first_ts": r.first_ts,
@@ -321,13 +387,12 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
         sys.stdout.write(json.dumps(payload, indent=2) + "\n")
         return 0
 
-    # Human-readable default format
     if not results:
         sys.stdout.write(f"no matches for: {args.query}\n")
         return 0
     for r in results:
         sys.stdout.write(
-            f"{r.date} · {r.project or '—'} · {r.session_id[:8]} "
+            f"{r.date} · {r.source} · {r.project or '—'} · {r.session_id[:8]} "
             f"({r.turn_count} turns"
             + (f", {r.redactions_total} redactions" if r.redactions_total else "")
             + ")\n"
@@ -377,13 +442,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--verbose", "-v", action="store_true")
 
+    source_choices = (*KNOWN_SOURCES, SOURCE_ALL)
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("daily", help="render yesterday's MD (what the scheduler runs)")
-    sub.add_parser("backfill", help="render every historical date")
+
+    daily_p = sub.add_parser(
+        "daily", help="render yesterday's MD (what the scheduler runs)"
+    )
+    daily_p.add_argument(
+        "--source", choices=source_choices, default=SOURCE_ALL,
+        help="which adapter source to ingest (default: all)",
+    )
+
+    backfill_p = sub.add_parser("backfill", help="render every historical date")
+    backfill_p.add_argument(
+        "--source", choices=source_choices, default=SOURCE_ALL,
+        help="which adapter source to ingest (default: all)",
+    )
 
     sp = sub.add_parser("search", help="query the FTS index over captured sessions")
     sp.add_argument("query", nargs="?", help="FTS5 query (phrases, AND/OR/NOT, prefix*)")
     sp.add_argument("--project", help="filter to sessions from this project")
+    sp.add_argument(
+        "--source", choices=source_choices, default=SOURCE_ALL,
+        help="filter results by adapter source (default: all)",
+    )
     sp.add_argument("--since", type=_parse_date, help="YYYY-MM-DD, inclusive")
     sp.add_argument("--until", type=_parse_date, help="YYYY-MM-DD, inclusive")
     sp.add_argument("--limit", type=int, default=20)

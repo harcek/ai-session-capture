@@ -195,6 +195,58 @@ def test_daily_command_uses_specified_date(cli_env, fake_projects_root):
     assert _find_session_file(base) is not None
 
 
+def test_backfill_with_codex_source_only(cli_env, fake_projects_root, tmp_path, monkeypatch):
+    """--source codex skips Claude transcripts even when Claude data exists.
+    Codex sessions land under sessions/codex/<project>/."""
+    import json as _json
+
+    # Seed a Claude session
+    _seed_session(fake_projects_root, "2026-04-20")
+
+    # Seed a Codex session at a tmp_path codex root
+    codex_root = tmp_path / "codex_sessions"
+    codex_jsonl = codex_root / "2026" / "04" / "21" / "rollout-test.jsonl"
+    codex_jsonl.parent.mkdir(parents=True)
+    with codex_jsonl.open("w") as f:
+        for d in [
+            {
+                "type": "session_meta",
+                "timestamp": "2026-04-21T10:00:00.000Z",
+                "payload": {
+                    "id": "codex-sess",
+                    "cwd": "/u/proj",
+                    "originator": "codex_cli_rs",
+                    "cli_version": "0.1",
+                    "source": "cli",
+                    "model_provider": "openai",
+                    "git": {"branch": "main", "commit_hash": "x", "repository_url": ""},
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-04-21T10:00:01.000Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "codex prompt"}],
+                },
+            },
+        ]:
+            f.write(_json.dumps(d) + "\n")
+    import os as _os
+    _os.chmod(codex_jsonl, 0o600)
+    monkeypatch.setenv("CODEX_SESSIONS_ROOT", str(codex_root.resolve()))
+
+    rc = main(["--config", "/nonexistent.toml", "backfill", "--source", "codex"])
+    assert rc == 0
+
+    base = cli_env / ".local" / "share" / "claude-sessions"
+    # Codex session present under sessions/codex/<project>/
+    assert any(base.rglob("sessions/codex/proj/*.md"))
+    # No Claude session was processed (--source codex)
+    assert not any(base.rglob("sessions/claude/*"))
+
+
 def test_daily_reindexes_all_dates_for_cross_day_sessions(
     cli_env, fake_projects_root, tmp_path
 ):
