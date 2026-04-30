@@ -532,7 +532,9 @@ def test_orphan_function_call_dropped(fake_codex_root, caplog):
     with caplog.at_level(logging.DEBUG, logger="csc"):
         records = list(parse_codex_file(jsonl))
     assert all(not r.tool_calls for r in records)
-    assert any("orphan function_call" in r.message for r in caplog.records)
+    # Tighten substring so the assertion isn't satisfied by an
+    # "orphan function_call_output" log line in a different test.
+    assert any("orphan function_call (no preceding" in r.message for r in caplog.records)
 
 
 def test_orphan_function_call_output_dropped(fake_codex_root, caplog):

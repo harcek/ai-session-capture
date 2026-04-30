@@ -22,8 +22,6 @@ from datetime import datetime
 from pathlib import Path
 
 from .parser import (
-    SENSITIVE_BASH,  # noqa: F401  — re-exported for any external consumer
-    SENSITIVE_PATH,  # noqa: F401
     MAX_LINE_BYTES,
     Record,
     SessionMeta,

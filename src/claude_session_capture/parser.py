@@ -171,10 +171,6 @@ def assert_under_root(path: Path, root: Path) -> Path:
     return resolved
 
 
-# Backwards-compat alias for the previously-private name.
-_assert_under_root = assert_under_root
-
-
 def iter_raw_lines(path: Path, root: Path | None = None) -> Iterator[dict]:
     """Yield parsed JSON dicts line by line. Malformed lines skip silently.
 
@@ -215,8 +211,6 @@ def parse_ts(raw: dict) -> datetime | None:
         return None
 
 
-# Backwards-compat alias.
-_parse_ts = parse_ts
 
 
 def _derive_project(jsonl_path: Path) -> str:
@@ -300,7 +294,7 @@ def parse_file(path: Path, root: Path | None = None) -> Iterator[Record]:
 
     for raw in iter_raw_lines(path, root=root):
         rtype = raw.get("type", "")
-        ts = _parse_ts(raw)
+        ts = parse_ts(raw)
         sid = raw.get("sessionId", "")
         uuid = raw.get("uuid", "")
         parent = raw.get("parentUuid") or ""
