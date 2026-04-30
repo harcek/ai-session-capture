@@ -10,8 +10,9 @@ turn_count: {{ turn_count }}
 {% endif %}{% if redactions.total %}redactions_total: {{ redactions.total }}
 redactions:
 {% for label, count in redactions.counts.items() | sort %}  {{ label }}: {{ count }}
-{% endfor %}{% endif %}tags:
-  - claude-session
+{% endfor %}{% endif %}source: {{ source }}
+tags:
+  - {{ source }}-session
   - project/{{ project }}
 ---
 

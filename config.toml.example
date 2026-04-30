@@ -1,9 +1,10 @@
 # ai-session-capture — example config
 #
-# This file configures the Claude Code adapter (the
-# claude_session_capture Python package). Copy to
-# ~/.config/claude-session-capture/config.toml and edit — every
-# section is optional; omitted fields use the defaults shown here.
+# Settings apply to the shared pipeline (parse → redact → render →
+# index) and therefore affect every adapter (Claude Code today,
+# Codex / OpenCode in future releases). Copy to
+# ~/.config/ai-session-capture/config.toml and edit — every section
+# is optional; omitted fields use the defaults shown here.
 
 # The Claude transcripts root is NOT configurable via TOML (see ADR-0004).
 # By default the tool reads from $CLAUDE_CONFIG_DIR/projects if set, else
@@ -50,7 +51,7 @@ max_message_chars = 8000
 
 [output]
 # Daily MDs land here. This is the data-repo path.
-dir = "~/.local/share/claude-sessions"
+dir = "~/.local/share/ai-sessions"
 
 [output.frontmatter]
 # YAML frontmatter atop each session + daily file (date, session count,

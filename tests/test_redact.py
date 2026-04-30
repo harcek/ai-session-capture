@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_session_capture.redact import (
+from ai_session_capture.redact import (
     RedactionReport,
     neutralize,
     redact,

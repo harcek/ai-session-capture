@@ -1,16 +1,18 @@
 # ai-session-capture
 
-> A private, redaction-first archive initially for Claude Code sessions,
-> producing Markdown files and a local search/MCP index.
+> A private, redaction-first archive for AI coding-agent sessions
+> (Claude Code, Codex, …), producing Markdown files and a local
+> search/MCP index.
 >
 > Human-readable, git-friendly, and local-first by default.
 
-A scheduled tool that parses Claude Code's own session transcripts
-(`~/.claude/projects/*/*.jsonl`), redacts anything that looks like a
-credential, and writes a human-readable Markdown archive plus a local
-SQLite FTS5 search index. Future Claude Code sessions can query the
-archive via an MCP server, turning the backfill into long-term memory
-across sessions.
+A scheduled tool that parses transcripts from your AI coding agents —
+Claude Code (`~/.claude/projects/*/*.jsonl`) and Codex
+(`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) today — redacts
+anything that looks like a credential, and writes a human-readable
+Markdown archive plus a local SQLite FTS5 search index. Future Claude
+Code sessions can query the archive via an MCP server, turning the
+backfill into long-term memory across sessions.
 
 No network calls at runtime. No database server. No web surface. The
 output is plain Markdown in a git repo you own; the index is a single
@@ -19,39 +21,44 @@ paths.
 
 ## Who this is for
 
-Anyone who uses Claude Code and wants a searchable, shareable, secret-
-scrubbed record of their sessions — for reference, for standup notes,
-for onboarding teammates to past decisions, or for querying from
-future Claude sessions via MCP.
+Anyone who uses Claude Code or Codex and wants a searchable,
+shareable, secret-scrubbed record of their sessions — for reference,
+for standup notes, for onboarding teammates to past decisions, or for
+querying from future agent sessions via MCP.
 
 ## What it does
 
-- **Captures** — parses every JSONL under `~/.claude/projects/` once a
-  day (or on demand) into normalized session records.
+- **Captures** — parses every JSONL under `~/.claude/projects/` and
+  `~/.codex/sessions/` once a day (or on demand) into normalized
+  session records. Absent agent dirs are skipped silently — install
+  one agent, both, or neither.
 - **Redacts** — aggressive by default. Structural drops at parse time
   kill sensitive tool outputs (`env`, `cat .env`, reads of
   `.aws/`/`.ssh/`) before they leave the parser. Regex pass scrubs
   AWS / GitHub / OpenAI / Anthropic / Slack / Stripe / JWT / SSH key
   tokens, plus `.env`-style assignments with sensitive key names.
 - **Renders** — one Markdown file per session under
-  `sessions/<project>/<YYYY-MM-DD>_<HH-MM>_<id>[_<slug>].md`, plus a
-  thin per-day index file under `daily/<YYYY-MM-DD>.md` with
-  Obsidian-style wiki-links to the sessions that touched that day.
+  `sessions/<source>/<project>/<YYYY-MM-DD>_<HH-MM>_<id>[_<slug>].md`,
+  where `<source>` is `claude` or `codex`. Plus a thin per-day index
+  file under `daily/<YYYY-MM-DD>.md` with Obsidian-style wiki-links
+  to the sessions that touched that day, across all sources.
 - **Indexes** — per-session rows in a local SQLite FTS5 table for
   millisecond-latency phrase / AND / OR / prefix search across years
-  of archive.
+  of archive. The `source` column lets you scope to a single agent.
 - **Serves (optional)** — an MCP server exposes four read-only query
   tools (`search_sessions`, `list_projects`, `list_recent_sessions`,
-  `get_session_text`) that Claude Code sessions can call directly.
+  `get_session_text`) that Claude Code sessions can call directly,
+  with optional `source` filter.
 
 ## Paths (XDG-standard)
 
 | What | Default path |
 |---|---|
-| Config | `~/.config/claude-session-capture/config.toml` |
-| State (cursor, lockfile, run log, FTS DB) | `~/.local/state/claude-session-capture/` |
-| Output archive (your data, a git repo) | `~/.local/share/claude-sessions/` |
-| Input (read-only) | `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects`) |
+| Config | `~/.config/ai-session-capture/config.toml` |
+| State (cursor, lockfile, run log, FTS DB) | `~/.local/state/ai-session-capture/` |
+| Output archive (your data, a git repo) | `~/.local/share/ai-sessions/` |
+| Input (read-only) — Claude | `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects`) |
+| Input (read-only) — Codex | `~/.codex/sessions/` (or `$CODEX_SESSIONS_ROOT`) |
 
 All paths can be overridden — see [`config.toml.example`](config.toml.example)
 and [`docs/adr/0004-derive-dont-configure-claude-root.md`](docs/adr/0004-derive-dont-configure-claude-root.md).
@@ -60,7 +67,7 @@ and [`docs/adr/0004-derive-dont-configure-claude-root.md`](docs/adr/0004-derive-
 
 ```sh
 git clone <this repo>
-cd claude-session-capture
+cd ai-session-capture
 python3 -m venv .venv
 .venv/bin/pip install -e '.[mcp]'          # or omit [mcp] if you don't need the MCP server
 .venv/bin/pytest tests/                    # expect all green
@@ -75,23 +82,36 @@ The scheduler fires once a day, early morning local time (default
 06:00), and catches up exactly once on wake / boot if the machine was
 asleep at the trigger.
 
+### Upgrading from 0.1.x
+
+The 0.2.0 rename moves XDG dirs in place on first run (config / state /
+default data dir). Two things still need a manual touch:
+
+1. `./scripts/install.sh` to register the new-named scheduling units
+   (the old `claude-session-capture.daily.*` units can be removed via
+   `./scripts/uninstall.sh` once you've confirmed the new ones run).
+2. If you wired the MCP server into Claude Code, update the
+   `mcpServers.<name>.command` field in `~/.claude/settings.json` to
+   point at `ai-session-capture` (see the snippet below).
+
 ## Usage
 
 ```sh
 # One-off runs
-claude-session-capture backfill                   # process all historical transcripts
-claude-session-capture daily                      # render yesterday's sessions (what the scheduler does)
-claude-session-capture --dry-run backfill         # render to stdout, touch nothing
-claude-session-capture --show-redactions daily    # just the redaction count, no body
+ai-session-capture backfill                   # process all historical transcripts (every source)
+ai-session-capture daily                      # render yesterday's sessions (what the scheduler does)
+ai-session-capture backfill --source codex    # only Codex transcripts
+ai-session-capture --dry-run backfill         # render to stdout, touch nothing
+ai-session-capture --show-redactions daily    # just the redaction count, no body
 
 # Search the archive (SQLite FTS5 — phrase, AND/OR/NOT, prefix)
-claude-session-capture search "rate limit"
-claude-session-capture search "scanner" --project <your-project> --since 2026-04-01
-claude-session-capture search "redact*" --limit 5 --format json
-claude-session-capture search --rebuild           # drop and re-index everything
+ai-session-capture search "rate limit"
+ai-session-capture search "scanner" --project <your-project> --since 2026-04-01
+ai-session-capture search "redact*" --source codex --limit 5 --format json
+ai-session-capture search --rebuild           # drop and re-index everything
 
 # One-off import from an archive / another machine
-claude-session-capture --projects-root /path/to/other/.claude/projects backfill
+ai-session-capture --projects-root /path/to/other/.claude/projects backfill
 ```
 
 ## Wire into Claude Code as an MCP server
@@ -102,8 +122,8 @@ four read-only tools. Add to `~/.claude/settings.json`:
 ```json
 {
   "mcpServers": {
-    "claude-sessions": {
-      "command": "/absolute/path/to/.venv/bin/claude-session-capture",
+    "ai-sessions": {
+      "command": "/absolute/path/to/.venv/bin/ai-session-capture",
       "args": ["mcp-serve"]
     }
   }
@@ -111,9 +131,10 @@ four read-only tools. Add to `~/.claude/settings.json`:
 ```
 
 Use the full venv path so Claude Code doesn't need
-`claude-session-capture` on `$PATH`. Restart Claude Code. In any new
+`ai-session-capture` on `$PATH`. Restart Claude Code. In any new
 session, ask Claude things like *"what did I decide about X last
-month?"* and it will query the archive directly via MCP.
+month?"* (optionally scoped to a source) and it will query the archive
+directly via MCP.
 
 ## Security posture
 
@@ -146,27 +167,31 @@ Two guiding principles:
 ## Architecture
 
 Short map in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Decision
-records in [`docs/adr/`](docs/adr/). Roughly 1,800 lines of Python
-across seven modules, intentionally small:
+records in [`docs/adr/`](docs/adr/). The package is organized around
+the **adapter pattern** — a shared pipeline with source-specific
+parsers at the front:
 
 ```
-parser.py      — stream JSONL, structural drops
-redact.py      — regex redaction + prompt-injection neutralization
-render.py      — per-session + daily-index Markdown via Jinja2
-state.py       — lock, atomic writes, content-hash idempotency
-search.py      — SQLite FTS5 index
-cli.py         — daily / backfill / search / mcp-serve
-mcp_server.py  — read-only MCP tools
+parser.py        — Claude Code JSONL stream + structural drops
+codex_parser.py  — Codex rollout JSONL stream + structural drops
+redact.py        — regex redaction + prompt-injection neutralization
+render.py        — per-session + daily-index Markdown via Jinja2
+state.py         — lock, atomic writes, content-hash idempotency
+search.py        — SQLite FTS5 index (with source dimension)
+cli.py           — daily / backfill / search / mcp-serve (with --source)
+mcp_server.py    — read-only MCP tools (with source filter)
 ```
+
+Adapters share everything downstream of the parser. New agents land
+as new sibling parsers — no changes to redact / render / state /
+search / mcp_server.
 
 ## Roadmap
 
-See [`BACKLOG.md`](BACKLOG.md) for the prioritized work list. The
-natural next step is **source-aware ingestion across machines** —
-unifying multiple `~/.claude/projects/` roots into one archive without
-losing provenance. A later extension could add adapters for **Codex**
-and **OpenCode**, covering the three dominant coding-agent
-transcript formats.
+See [`BACKLOG.md`](BACKLOG.md) for the prioritized work list. Next-up
+items: **OpenCode adapter** (third agent, mechanically similar to the
+Codex one) and **source-aware ingestion across machines** (multi-host
+unified archive without losing provenance).
 
 ## Development
 

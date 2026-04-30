@@ -1,8 +1,8 @@
 #!/bin/sh
-# Install the claude-session-capture scheduling units for the current user.
+# Install the ai-session-capture scheduling units for the current user.
 # Detects macOS vs Linux and installs the appropriate back-end:
 #   macOS: ~/Library/LaunchAgents/$LABEL.plist  (default: ai-session-capture.daily.plist)
-#   Linux: ~/.config/systemd/user/claude-session-capture.{service,timer}
+#   Linux: ~/.config/systemd/user/ai-session-capture.{service,timer}
 #
 # Re-running this script is idempotent — existing units are reloaded.
 
@@ -17,9 +17,9 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 # Resolve the installed CLI entrypoint. The user is expected to have run
 # `uv tool install .` or `pip install --user -e .` from REPO_DIR before
 # invoking this script, so the binary is somewhere on PATH.
-if ! SCRIPT_PATH="$(command -v claude-session-capture 2>/dev/null)"; then
+if ! SCRIPT_PATH="$(command -v ai-session-capture 2>/dev/null)"; then
     cat >&2 <<EOF
-error: claude-session-capture not found on PATH.
+error: ai-session-capture not found on PATH.
   Install the tool first, e.g.:
     cd "$REPO_DIR"
     uv tool install .        # or: pip install --user -e .
@@ -40,7 +40,7 @@ case "$(uname -s)" in
 Darwin)
     PLIST_DIR="$HOME/Library/LaunchAgents"
     PLIST="$PLIST_DIR/$LABEL.plist"
-    LOG_DIR="$HOME/Library/Logs/claude-session-capture"
+    LOG_DIR="$HOME/Library/Logs/ai-session-capture"
 
     mkdir -p "$PLIST_DIR" "$LOG_DIR"
     subst "$REPO_DIR/scheduling/launchd.plist.tmpl" > "$PLIST"
@@ -62,12 +62,12 @@ Linux)
     UNIT_DIR="$HOME/.config/systemd/user"
     mkdir -p "$UNIT_DIR"
 
-    subst "$REPO_DIR/scheduling/systemd.service.tmpl" > "$UNIT_DIR/claude-session-capture.service"
-    subst "$REPO_DIR/scheduling/systemd.timer.tmpl"   > "$UNIT_DIR/claude-session-capture.timer"
-    chmod 0644 "$UNIT_DIR/claude-session-capture.service" "$UNIT_DIR/claude-session-capture.timer"
+    subst "$REPO_DIR/scheduling/systemd.service.tmpl" > "$UNIT_DIR/ai-session-capture.service"
+    subst "$REPO_DIR/scheduling/systemd.timer.tmpl"   > "$UNIT_DIR/ai-session-capture.timer"
+    chmod 0644 "$UNIT_DIR/ai-session-capture.service" "$UNIT_DIR/ai-session-capture.timer"
 
     systemctl --user daemon-reload
-    systemctl --user enable --now claude-session-capture.timer
+    systemctl --user enable --now ai-session-capture.timer
 
     # Enable lingering so the timer fires even when the user isn't logged in
     # (e.g. closed laptop lid, headless box). Needs root — skip silently if
@@ -90,10 +90,10 @@ EOF
 
     echo "installed systemd user units in: $UNIT_DIR"
     echo "next fire:"
-    systemctl --user list-timers claude-session-capture.timer --no-pager 2>/dev/null || true
+    systemctl --user list-timers ai-session-capture.timer --no-pager 2>/dev/null || true
     echo
-    echo "manual test: systemctl --user start claude-session-capture.service"
-    echo "tail logs:   journalctl --user -u claude-session-capture -f"
+    echo "manual test: systemctl --user start ai-session-capture.service"
+    echo "tail logs:   journalctl --user -u ai-session-capture -f"
     ;;
 *)
     echo "error: unsupported platform $(uname -s)" >&2

@@ -22,16 +22,46 @@ from pathlib import Path
 
 
 def state_dir() -> Path:
-    """XDG state dir: ``~/.local/state/claude-session-capture/``."""
+    """XDG state dir: ``~/.local/state/ai-session-capture/``.
+
+    Migration: a pre-v0.2.0 install used
+    ``~/.local/state/claude-session-capture/``. If the legacy dir
+    exists and the new one doesn't, ``rename`` it in place so cursors
+    and the run log carry over.
+    """
     try:
         from platformdirs import user_state_path
 
-        d = user_state_path("claude-session-capture")
+        d = user_state_path("ai-session-capture")
+        legacy = user_state_path("claude-session-capture")
     except ImportError:
-        d = Path.home() / ".local" / "state" / "claude-session-capture"
+        base = Path.home() / ".local" / "state"
+        d = base / "ai-session-capture"
+        legacy = base / "claude-session-capture"
+    if legacy.exists() and not d.exists():
+        legacy.rename(d)
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(d, 0o700)
     return d
+
+
+def migrate_data_dir(cfg) -> None:
+    """Rename the legacy data dir on default-config installs.
+
+    Pre-v0.2.0 the default output dir was
+    ``~/.local/share/claude-sessions``. If the user is still on the
+    default config (now ``~/.local/share/ai-sessions``) and only the
+    legacy dir exists, move it so the existing archive is preserved.
+    Custom output dirs are left untouched — they're the user's call.
+    """
+    DEFAULT_NEW = "~/.local/share/ai-sessions"
+    LEGACY = "~/.local/share/claude-sessions"
+    if cfg.output.dir != DEFAULT_NEW:
+        return
+    new_path = Path(DEFAULT_NEW).expanduser()
+    legacy = Path(LEGACY).expanduser()
+    if not new_path.exists() and legacy.exists():
+        legacy.rename(new_path)
 
 
 def _cursor_path(root: Path | None = None) -> Path:

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_session_capture.codex_parser import (
+from ai_session_capture.codex_parser import (
     collect_codex_meta,
     default_codex_root,
     iter_codex_jsonls,
@@ -200,6 +200,29 @@ def test_priming_blocks_skipped(fake_codex_root, priming_text):
     # Priming text must not appear; the real prompt must
     assert priming_text not in records[0].content
     assert "the actual prompt" in records[0].content
+
+
+def test_priming_only_record_is_dropped(fake_codex_root):
+    """A user record whose every input_text block is system priming
+    leaves no content behind and must not be emitted as an empty Q
+    turn (regression: empty-content user records used to render as
+    blank `### [ts] Q` blocks)."""
+    jsonl = fake_codex_root / "rollout-x.jsonl"
+    write_codex(
+        jsonl,
+        [
+            _meta(),
+            _user_msg_multi([
+                "<environment_context><cwd>/p</cwd></environment_context>",
+                "# AGENTS.md instructions for /p",
+            ]),
+            _user_msg_multi(["the real first prompt"]),
+        ],
+    )
+    records = list(parse_codex_file(jsonl))
+    user_records = [r for r in records if r.kind == "user"]
+    assert len(user_records) == 1
+    assert "the real first prompt" in user_records[0].content
 
 
 def test_first_prompt_uses_first_non_priming_block(fake_codex_root):

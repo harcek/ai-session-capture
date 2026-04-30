@@ -18,7 +18,6 @@ import json
 import logging
 import os
 from collections.abc import Iterator
-from datetime import datetime
 from pathlib import Path
 
 from .parser import (
@@ -330,6 +329,11 @@ def parse_codex_file(path: Path, root: Path | None = None) -> Iterator[Record]:
             text = "\n".join(text_parts)
 
             if role == "user":
+                # All blocks may have been filtered as system priming;
+                # an empty user record with no tool_results to flush is
+                # noise and shouldn't be rendered as a blank Q turn.
+                if not text and not pending_results:
+                    continue
                 rec = Record(
                     session_id=session_id,
                     timestamp=ts,

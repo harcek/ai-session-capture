@@ -11,11 +11,10 @@ propagates them.
 ## Project in one paragraph
 
 `ai-session-capture` is a redaction-first, local-first archive for
-AI coding-agent sessions. The project name is forward-looking — the
-0.1.0 release ships the **Claude Code adapter** (the
-`claude_session_capture` Python package in `src/`). Codex and
-OpenCode adapters will follow as sibling packages when the
-source-aware ingestion work lands (see [`BACKLOG.md`](BACKLOG.md)).
+AI coding-agent sessions. As of v0.2.0 it ships **two adapters in
+one package** (`src/ai_session_capture/`): a Claude Code adapter
+(`parser.py`) and a Codex adapter (`codex_parser.py`). OpenCode
+will follow as a third sibling parser (see [`BACKLOG.md`](BACKLOG.md)).
 The core pipeline — parse, structurally drop sensitive tool output,
 regex-redact, render Markdown, index in FTS5, serve via MCP — is
 shared; adapters contribute only their source-specific parsers.
@@ -47,19 +46,20 @@ shared; adapters contribute only their source-specific parsers.
 ## Project layout
 
 ```
-src/claude_session_capture/
-  parser.py       — JSONL streaming + structural drops
-  redact.py       — regex redaction + injection neutralization
-  render.py       — Jinja2 session + daily-index rendering
-  state.py        — flock, atomic writes, cursor hashes, logging
-  search.py       — SQLite FTS5 index + query
-  cli.py          — argparse entrypoints
-  mcp_server.py   — MCP stdio server (optional [mcp] extra)
-  layout.py       — filename / path generation
-  config.py       — TOML → dataclass loader
-  templates/      — Jinja2 session.md.j2 + daily_index.md.j2
+src/ai_session_capture/
+  parser.py        — Claude Code JSONL stream + structural drops
+  codex_parser.py  — Codex rollout JSONL stream + structural drops
+  redact.py        — regex redaction + injection neutralization
+  render.py        — Jinja2 session + daily-index rendering
+  state.py         — flock, atomic writes, cursor hashes, logging
+  search.py        — SQLite FTS5 index + query (source-aware)
+  cli.py           — argparse entrypoints (--source flag)
+  mcp_server.py    — MCP stdio server (optional [mcp] extra)
+  layout.py        — filename / path generation
+  config.py        — TOML → dataclass loader
+  templates/       — Jinja2 session.md.j2 + daily_index.md.j2
 
-tests/            — pytest suite (run ``pytest tests/``)
+tests/             — pytest suite (run ``pytest tests/``)
 docs/
   ARCHITECTURE.md — 5-minute orientation
   adr/            — architectural decision records (numbered)
@@ -143,9 +143,10 @@ Before proposing a design, check:
 - Don't add a new dependency without checking it's already in
   `pyproject.toml` or without a clear reason. Small dependency
   surface is an explicit goal.
-- Don't bundle Codex / OpenCode transcript ingestion into the core
-  parser. Those go in separate adapter modules when implemented (see
-  BACKLOG).
+- Don't bundle a new agent's transcript ingestion into an existing
+  parser. Each adapter is a sibling module (see `parser.py` and
+  `codex_parser.py`) and reuses everything downstream of itself —
+  redact, render, state, search, mcp_server are source-agnostic.
 
 ## Quick reference for scheduled runs
 

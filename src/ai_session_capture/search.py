@@ -67,7 +67,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
 
 
 def db_path() -> Path:
-    """XDG state: ``~/.local/state/claude-session-capture/index.db``.
+    """XDG state: ``~/.local/state/ai-session-capture/index.db``.
 
     One-shot migration: if an old ``logbook.db`` (pre-0.1.0 name) exists
     alongside and ``index.db`` does not, it's renamed in place. After

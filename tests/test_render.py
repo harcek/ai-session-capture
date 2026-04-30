@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from claude_session_capture.config import Config
-from claude_session_capture.parser import Record, SessionMeta
-from claude_session_capture.render import (
+from ai_session_capture.config import Config
+from ai_session_capture.parser import Record, SessionMeta
+from ai_session_capture.render import (
     render_daily_index,
     render_session_file,
     resolve_tz,
@@ -54,6 +54,24 @@ def test_render_session_file_basic():
     assert "hello session" in result.markdown  # title
     assert str(result.relpath).startswith("sessions/")
     assert str(result.relpath).endswith(".md")
+
+
+def test_render_session_file_frontmatter_uses_source():
+    """Codex sessions get `source: codex` and a `codex-session` tag,
+    Claude sessions stay `claude`. Without this the renderer would
+    hardcode `claude-session` for every adapter (regression guard for
+    the v0.2.0 multi-source rename)."""
+    cfg = Config()
+    claude_records = [_r(session_id="sclaude", source="claude", content="hi from claude")]
+    codex_records = [_r(session_id="scodex", source="codex", content="hi from codex")]
+    claude_md = render_session_file("sclaude", claude_records, None, cfg, tz=UTC).markdown
+    codex_md = render_session_file("scodex", codex_records, None, cfg, tz=UTC).markdown
+    assert "source: claude" in claude_md
+    assert "- claude-session" in claude_md
+    assert "- codex-session" not in claude_md
+    assert "source: codex" in codex_md
+    assert "- codex-session" in codex_md
+    assert "- claude-session" not in codex_md
 
 
 def test_render_session_file_cross_day_produces_single_file():

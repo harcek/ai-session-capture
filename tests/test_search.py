@@ -6,9 +6,9 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from claude_session_capture import search as S
-from claude_session_capture.config import Config
-from claude_session_capture.parser import Record
+from ai_session_capture import search as S
+from ai_session_capture.config import Config
+from ai_session_capture.parser import Record
 
 
 def _r(**kw):
@@ -109,7 +109,6 @@ def test_upsert_reindexes_when_content_changes(db):
 
 
 def test_project_filter(db):
-    cfg = Config()
     rows = [
         S.SessionIndexRow(
             id="s1", date="2026-04-20", project="alpha", cwd="/a", first_ts="",
@@ -282,7 +281,6 @@ def test_upsert_does_not_clean_rows_for_absent_sessions(db):
 )
 def test_search_limit_is_clamped(db, value, expected_min, expected_max):
     # Seed many rows so limit is observable
-    cfg = Config()
     rows = [
         S.SessionIndexRow(
             id=f"s{i}", date="2026-04-20", project="p", cwd="", first_ts="",

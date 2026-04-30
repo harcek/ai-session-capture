@@ -2,9 +2,10 @@
 
 `ai-session-capture` exists because AI-coding-agent transcripts
 contain sensitive material and you want a redacted, shareable archive.
-This release ships the Claude Code adapter; the threat model and
-defenses below apply to anything the adapter-based architecture
-ingests — future Codex / OpenCode adapters inherit the same posture.
+The threat model and defenses below apply uniformly to every
+adapter — the v0.2.0 Claude Code and Codex parsers run identical
+structural-drop matchers and share the same regex redaction
+downstream; future adapters inherit the same posture.
 
 The posture is documented here so future-you (or anyone reading the
 repo) knows what it protects against — and, more importantly, what
@@ -85,9 +86,10 @@ not a habit enabler. Every hit on the counter is a behavior to fix.
 - Tmp files live in the same directory as their target and are always
   cleaned up on exception; `os.replace` makes the rename atomic across
   any filesystem we care about.
-- State dir (`~/.local/state/claude-session-capture/`) holds
+- State dir (`~/.local/state/ai-session-capture/`) holds
   `cursor.json` (content hashes keyed by date), `run.lock`, `run.log`
-  (rotating 5 MB × 3), and `last-error` (cleared on success).
+  (rotating 5 MB × 3), `index.db` (FTS5), and `last-error` (cleared
+  on success).
 
 ## Structural drops
 
@@ -110,8 +112,9 @@ Matches that trigger a drop:
   `id_ed25519*`, `*.pem`, `*.p12`, `*.pfx`, `.kube/config`.
 
 If you need to extend this list, the patterns live in
-`src/claude_session_capture/parser.py::SENSITIVE_BASH` and
-`SENSITIVE_PATH`.
+`src/ai_session_capture/parser.py::SENSITIVE_BASH` and
+`SENSITIVE_PATH` — the Codex parser imports and shares them, so an
+extension covers every adapter at once.
 
 ## What a leak looks like
 
@@ -134,7 +137,7 @@ lands in a committed daily MD:
 
 - After any change to `parser.py::SENSITIVE_*` or `redact.py::_*_PATTERNS`,
   re-run the full test suite (`pytest tests/`) and eyeball a dry-run
-  (`claude-session-capture --dry-run backfill | head -200`).
+  (`ai-session-capture --dry-run backfill | head -200`).
 - Quarterly: run `--show-redactions` over the last 30 days, compare
   counts against baseline, investigate any big drop (might mean a
   regex broke).

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Remove the claude-session-capture scheduling units installed by install.sh.
+# Remove the ai-session-capture scheduling units installed by install.sh.
 # Leaves logs, state, and the data repo in place — they're yours.
 
 set -eu
@@ -21,10 +21,10 @@ Darwin)
     ;;
 Linux)
     UNIT_DIR="$HOME/.config/systemd/user"
-    if [ -f "$UNIT_DIR/claude-session-capture.timer" ]; then
-        systemctl --user disable --now claude-session-capture.timer 2>/dev/null || true
-        rm -f "$UNIT_DIR/claude-session-capture.service" \
-              "$UNIT_DIR/claude-session-capture.timer"
+    if [ -f "$UNIT_DIR/ai-session-capture.timer" ]; then
+        systemctl --user disable --now ai-session-capture.timer 2>/dev/null || true
+        rm -f "$UNIT_DIR/ai-session-capture.service" \
+              "$UNIT_DIR/ai-session-capture.timer"
         systemctl --user daemon-reload
         echo "removed systemd user units from: $UNIT_DIR"
     else
@@ -38,5 +38,5 @@ Linux)
 esac
 
 echo
-echo "note: logs, state, and the ~/.local/share/claude-sessions data repo"
+echo "note: logs, state, and the ~/.local/share/ai-sessions data repo"
 echo "were not touched. Remove them manually if you want a full clean."

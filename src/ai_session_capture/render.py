@@ -273,6 +273,10 @@ def render_session_file(
     if title:
         title = title.replace("\n", " ").strip()
 
+    # source is uniform within a session (set by the parser); pull it from
+    # any record. Falls back to "claude" via Record's default.
+    source = next((r.source for r in filtered if r.source), "claude")
+
     md = _jinja_env().get_template("session.md.j2").render(
         session_id=session_id,
         session_id_short=session_id[:8] if session_id else "unknown",
@@ -282,6 +286,7 @@ def render_session_file(
         ended_at=_fmt_datetime(last_ts, tz),
         dates=[d.isoformat() for d in dates_touched],
         cwd=safe_cwd,
+        source=source,
         turns=turns,
         turn_count=len(turns),
         sidechain_count=sidechain_count,
@@ -292,10 +297,6 @@ def render_session_file(
         },
         frontmatter_enabled=cfg.output.frontmatter.enabled,
     )
-
-    # source is uniform within a session (set by the parser); pull it from
-    # any record. Falls back to "claude" via Record's default.
-    source = next((r.source for r in filtered if r.source), "claude")
     naming = SessionNaming(
         session_id=session_id,
         project_raw=project_raw,

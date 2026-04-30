@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from claude_session_capture.parser import (
+from ai_session_capture.parser import (
     is_sensitive_bash,
     is_sensitive_path,
     parse_file,
@@ -243,7 +243,7 @@ def test_default_projects_root_precedence(tmp_path, monkeypatch):
     See ADR-0004 — the TOML config knob was removed; the root is derived
     from Claude Code's own canonicals plus a test-only env override.
     """
-    from claude_session_capture.parser import default_projects_root
+    from ai_session_capture.parser import default_projects_root
 
     env_root = tmp_path / "from_env"
     env_root.mkdir()
@@ -297,7 +297,7 @@ def test_collect_session_meta_custom_title(fake_projects_root):
             {"type": "agent-name", "sessionId": "s1", "agentName": "agent-x"},
         ],
     )
-    from claude_session_capture.parser import collect_session_meta
+    from ai_session_capture.parser import collect_session_meta
 
     meta = collect_session_meta(jsonl)
     assert "s1" in meta
@@ -338,7 +338,7 @@ def test_collect_session_meta_skips_slash_command_wrappers(fake_projects_root):
             },
         ],
     )
-    from claude_session_capture.parser import collect_session_meta
+    from ai_session_capture.parser import collect_session_meta
 
     meta = collect_session_meta(jsonl)
     assert meta["s1"].first_prompt == "actual first prompt here"
@@ -358,7 +358,7 @@ def test_collect_session_meta_empty_session(fake_projects_root):
             }
         ],
     )
-    from claude_session_capture.parser import collect_session_meta
+    from ai_session_capture.parser import collect_session_meta
 
     meta = collect_session_meta(jsonl)
     assert meta["s1"].custom_title is None
@@ -383,7 +383,7 @@ def test_collect_session_meta_handles_list_content(fake_projects_root):
             },
         ],
     )
-    from claude_session_capture.parser import collect_session_meta
+    from ai_session_capture.parser import collect_session_meta
 
     meta = collect_session_meta(jsonl)
     assert meta["s1"].first_prompt == "this is the first prompt"

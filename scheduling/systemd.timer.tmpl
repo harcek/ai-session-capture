@@ -1,5 +1,5 @@
 [Unit]
-Description=Fire claude-session-capture daily at 06:00 local
+Description=Fire ai-session-capture daily at 06:00 local
 
 [Timer]
 # OnCalendar uses local TZ by default (DST-aware).
@@ -10,7 +10,7 @@ OnCalendar=*-*-* 06:00:00
 # semantics.
 Persistent=true
 AccuracySec=1min
-Unit=claude-session-capture.service
+Unit=ai-session-capture.service
 
 [Install]
 WantedBy=timers.target

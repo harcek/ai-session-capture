@@ -11,8 +11,8 @@ import json
 
 import pytest
 
-from claude_session_capture import mcp_server as M
-from claude_session_capture import search as S
+from ai_session_capture import mcp_server as M
+from ai_session_capture import search as S
 
 
 @pytest.fixture

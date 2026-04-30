@@ -66,7 +66,7 @@ class FrontmatterConfig:
 
 @dataclass
 class OutputConfig:
-    dir: str = "~/.local/share/claude-sessions"
+    dir: str = "~/.local/share/ai-sessions"
     frontmatter: FrontmatterConfig = field(default_factory=FrontmatterConfig)
 
 
@@ -140,10 +140,10 @@ def _merge_into(target, data: dict) -> None:
 
 
 def default_config_path() -> Path:
-    """XDG config path: ``~/.config/claude-session-capture/config.toml``."""
+    """XDG config path: ``~/.config/ai-session-capture/config.toml``."""
     try:
         from platformdirs import user_config_path
 
-        return user_config_path("claude-session-capture") / "config.toml"
+        return user_config_path("ai-session-capture") / "config.toml"
     except ImportError:
-        return Path.home() / ".config" / "claude-session-capture" / "config.toml"
+        return Path.home() / ".config" / "ai-session-capture" / "config.toml"

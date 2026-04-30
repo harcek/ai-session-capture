@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from claude_session_capture.config import Config
-from claude_session_capture.layout import (
+from ai_session_capture.config import Config
+from ai_session_capture.layout import (
     SessionNaming,
     daily_index_relpath,
     sanitize_project,

@@ -5,23 +5,27 @@ behind individual decisions, see [docs/adr/](adr/).
 
 `ai-session-capture` is organized around the **adapter pattern**: a
 shared pipeline (parse → redact → render → index → serve) with
-source-specific parsers at the front. The 0.1.0 release ships the
-Claude Code adapter (the `claude_session_capture` Python package).
-Future Codex / OpenCode adapters are sibling packages that reuse
-everything downstream of `parser.py`.
+source-specific parsers at the front. The package
+(`src/ai_session_capture/`) ships two adapters today —
+`parser.py` (Claude Code) and `codex_parser.py` (Codex) — both
+producing the same `Record` type. Future adapters (OpenCode, …) are
+sibling parser modules that reuse everything downstream of the
+parser layer.
 
 ## Pipeline
 
 ```
-~/.claude/projects/*/*.jsonl        (input — raw Claude Code transcripts)
+~/.claude/projects/*/*.jsonl        (Claude Code transcripts)
+~/.codex/sessions/YYYY/MM/DD/*.jsonl (Codex rollouts)
             │
             ▼
-      parser.py            ← structural drops run here (sensitive tool
+  parser.py / codex_parser.py
+                              ← structural drops run here (sensitive tool
             │                 results are replaced with placeholders
             │                 BEFORE the regex layer ever sees them)
             ▼
-   list[Record]            ← normalized, schema-stable data class
-            │
+   list[Record]            ← normalized, schema-stable data class with
+            │                 a `source` discriminator (claude|codex|…)
             ▼
       render.py            ← redact.py is invoked inline on every piece
             │                 of user-facing text; a shared RedactionReport
@@ -35,24 +39,27 @@ everything downstream of `parser.py`.
             │                 (skip write if unchanged), atomic
             │                 tmp+rename, 0o600 mode, flock-guarded
             ▼
- ~/.local/share/claude-sessions/YYYY-MM-DD.md   (output, private git repo)
+ ~/.local/share/ai-sessions/sessions/<source>/<project>/<file>.md
+                                       (output, private git repo)
 ```
 
 ## Module map
 
-| Module | Responsibility | Lines |
-|---|---|---|
-| `parser.py` | Stream-parse JSONL, classify message types, apply structural drops | ~250 |
-| `redact.py` | Regex redaction + prompt-injection neutralization + RedactionReport | ~170 |
-| `render.py` | Group by session, apply content filters, emit Markdown via Jinja2 | ~230 |
-| `config.py` | TOML → dataclass mapping with sensible defaults | ~110 |
-| `state.py` | Atomic writes, flock, cursor-based idempotency, rotating log, desktop notify | ~190 |
-| `cli.py` | argparse subcommands (daily, backfill, search, mcp-serve), orchestrates the others | ~280 |
-| `search.py` | SQLite FTS5 index: upsert, query, rebuild, list helpers | ~260 |
-| `mcp_server.py` | MCP stdio server — four read-only tools over the FTS index | ~180 |
-| `templates/daily.md.j2` | Jinja2 template — YAML frontmatter, warning banner, per-session sections | ~60 |
+| Module | Responsibility |
+|---|---|
+| `parser.py` | Claude Code: stream-parse JSONL, classify message types, apply structural drops |
+| `codex_parser.py` | Codex: stream-parse rollout JSONL, dispatch on `(rtype, ptype)`, apply same structural drops |
+| `redact.py` | Regex redaction + prompt-injection neutralization + RedactionReport |
+| `render.py` | Group by session, apply content filters, emit Markdown via Jinja2 |
+| `config.py` | TOML → dataclass mapping with sensible defaults |
+| `state.py` | Atomic writes, flock, cursor-based idempotency, rotating log, desktop notify, XDG-path migration |
+| `cli.py` | argparse subcommands (daily, backfill, search, mcp-serve) with `--source`, orchestrates the others |
+| `search.py` | SQLite FTS5 index (source-aware): upsert, query, rebuild, list helpers |
+| `mcp_server.py` | MCP stdio server — four read-only tools over the FTS index, with `source` filter |
+| `templates/*.j2` | Jinja2 templates — session.md.j2 + daily_index.md.j2 |
 
-Roughly 1,600 lines of Python. Intentionally small.
+Intentionally small. Adapters share everything to the right of the
+parser column.
 
 ## Data flow invariants
 
@@ -76,7 +83,7 @@ something downstream breaks:
 ## Config resolution order
 
 1. `--config <path>` CLI flag (explicit)
-2. `~/.config/claude-session-capture/config.toml` (default)
+2. `~/.config/ai-session-capture/config.toml` (default)
 3. Dataclass defaults (no file needed)
 
 Unknown fields in the TOML are silently ignored so a typo can't wedge
@@ -86,27 +93,30 @@ a headless 06:00 run.
 
 Two templates, one installer:
 
-- **macOS:** `~/Library/LaunchAgents/<reverse-dns-label>.claude-session-capture.plist`
+- **macOS:** `~/Library/LaunchAgents/ai-session-capture.daily.plist`
   (launchd's calendar-based catch-up handles missed fires; label is
-  configurable via the installer)
-- **Linux:** `~/.config/systemd/user/claude-session-capture.{service,timer}`
+  configurable via `LABEL=...` in the installer environment)
+- **Linux:** `~/.config/systemd/user/ai-session-capture.{service,timer}`
   with `Persistent=true` (same semantics, different mechanism)
 
 Both fire at 06:00 local time. `install.sh` detects the platform via
 `uname -s` and installs the right one. The service invokes
-`claude-session-capture daily`, which defaults to rendering "yesterday
+`ai-session-capture daily`, which defaults to rendering "yesterday
 in local TZ."
 
 ## XDG paths
 
 All paths are XDG-standard and identical across platforms:
 
-- Config: `~/.config/claude-session-capture/`
-- State: `~/.local/state/claude-session-capture/` (cursor, lock, run.log, last-error)
-- Output (data repo): `~/.local/share/claude-sessions/`
+- Config: `~/.config/ai-session-capture/`
+- State: `~/.local/state/ai-session-capture/` (cursor, lock, run.log, last-error, index.db)
+- Output (data repo): `~/.local/share/ai-sessions/`
 
-This keeps muscle memory and documentation consistent — no
-"where was that file again" between machines.
+These rename from `claude-session-capture` / `claude-sessions` in
+v0.2.0; first run after upgrade migrates the existing dirs in place
+(see `state.state_dir` and `state.migrate_data_dir`). This keeps
+muscle memory and documentation consistent — no "where was that file
+again" between machines.
 
 ## Search + MCP sit on top of the Phase 1 pipeline
 
@@ -119,8 +129,8 @@ This keeps muscle memory and documentation consistent — no
            (data repo)       (state DB)
                                    ▲
                                    │
-                    claude-session-capture search
-                    claude-session-capture mcp-serve
+                    ai-session-capture search
+                    ai-session-capture mcp-serve
                                    ▲
                                    │
                            Claude Code sessions

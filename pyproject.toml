@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claude-session-capture"
-version = "0.1.0"
-description = "Daily human-readable capture of Claude Code sessions with aggressive secret redaction."
+name = "ai-session-capture"
+version = "0.2.0"
+description = "Redaction-first archive for AI-coding-agent sessions (Claude Code, Codex, …) with local search + MCP."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Daniel Harcek", email = "daniel@harcek.info" }]
@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-claude-session-capture = "claude_session_capture.cli:main"
+ai-session-capture = "ai_session_capture.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/harcek/ai-session-capture"
@@ -35,7 +35,7 @@ mcp = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_session_capture"]
+packages = ["src/ai_session_capture"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

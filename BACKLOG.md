@@ -17,37 +17,42 @@ here when a concrete motivating use case arrives.
 
 ## 🔜 Next-up
 
-### #A — Source-aware ingestion across machines
+### #A — OpenCode transcript adapter
 
-Support multiple Claude transcript roots (e.g. each of your machines
-contributes its own `~/.claude/projects/`) as named sources, with
-provenance preserved in the archive. This is the natural next step
-after local-first is stable: a unified archive without losing which
-machine a session came from.
+Same pattern as the Codex adapter shipped in v0.2.0: a sibling parser
+module (`opencode_parser.py`) producing `Record(source="opencode")`
+instances, reusing the shared redact / render / state / search /
+mcp_server pipeline. Different transcript shape; mechanical to add
+once the format is reverse-engineered.
 
-Rough shape (see `docs/adr/0004-...` for the precedence + why the
-single-root design stops here):
+- Depends on: nothing shipped. Reuses ADR-0005's adapter pattern.
+- Estimated effort: M (1–2 days including format research).
+
+### #B — Multi-machine ingestion
+
+Support multiple roots per source (e.g. each of your machines
+contributes its own `~/.claude/projects/` and `~/.codex/sessions/`),
+with provenance preserved in the archive. v0.2.0 adds the `source`
+discriminator (per-tool); this adds a `machine` discriminator
+alongside it. Useful for unified archives across a laptop +
+workstation + Mac mini setup.
+
+Rough shape:
 
 ```toml
-[[sources]]
+[[machines.claude]]
 name = "laptop"
 root = "~/Archives/laptop-claude-projects"
 
-[[sources]]
+[[machines.claude]]
 name = "workstation"
 root = "auto"   # the current machine's default
 ```
 
-Each session's frontmatter gains a `source` field; FTS index gets a
-`source` column; `--source <name>` filter on the CLI. Session IDs
-across sources are disambiguated via `(source, session_id)`.
-
-- Why core: eliminates the "which machine's archive wins?" problem
-  for multi-machine workflows.
-- Depends on nothing shipped; internal-only refactor.
+- Depends on: nothing shipped.
 - Estimated effort: M (1 day).
 
-### #B — Private remote + auto-push
+### #C — Private remote + auto-push
 
 Wire a private git remote for the data repo; daily runs optionally
 commit and push after writing. Sync approach is a prerequisite
@@ -58,27 +63,6 @@ before wiring the push logic.
 ---
 
 ## ◇ Backlog
-
-### Codex transcript adapter
-
-Codex (and its CLI incarnations) stores session data in a different
-shape than Claude Code. Add an adapter that normalizes Codex
-transcripts into the same internal `Record` type so they land in the
-same archive with a `source=codex` tag. Lives as a sibling module
-(`codex_parser.py`) alongside the Claude parser — no changes to the
-existing parser.
-
-- Depends on: #A (source-aware ingestion).
-- Estimated effort: M (1–2 days including format research).
-
-### OpenCode transcript adapter
-
-Same pattern for OpenCode. Different enough shape that it needs its
-own adapter; common enough use case that one tool covering all three
-(Claude Code + Codex + OpenCode) is a real differentiator.
-
-- Depends on: #A.
-- Estimated effort: M (similar to Codex adapter).
 
 ### Obsidian compatibility polish
 
@@ -132,6 +116,12 @@ of data to meaningfully summarize.
 
 ## Completed (for context)
 
+- **Multi-source + Codex adapter + rename (ADR-0005, 0.2.0)** —
+  package and CLI renamed `claude-session-capture` →
+  `ai-session-capture`; second adapter (`codex_parser.py`) ingests
+  `~/.codex/sessions/` rollouts; `source` column on FTS;
+  `--source claude|codex|all` flag on CLI + MCP; output layout
+  now `sessions/<source>/<project>/`.
 - **Per-session + daily-index layout (ADR-0003)** — replaced the v1
   "one file per day, all sessions mixed" layout. One file per session
   UUID (cross-day → one file pinned to start date), thin per-day
@@ -141,7 +131,7 @@ of data to meaningfully summarize.
   `--projects-root` CLI flag + honoring `CLAUDE_CONFIG_DIR`.
 - **SQLite FTS5 search index** — `search` CLI subcommand with
   `--rebuild`, integrated into `daily`/`backfill`. Index at
-  `~/.local/state/claude-session-capture/index.db`.
+  `~/.local/state/ai-session-capture/index.db`.
 - **MCP server** — `mcp-serve`, four read-only tools
   (`search_sessions`, `list_projects`, `list_recent_sessions`,
   `get_session_text`). Optional `[mcp]` extra.

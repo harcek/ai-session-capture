@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from claude_session_capture import state as st
+from ai_session_capture import state as st
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def tmp_state(tmp_path, monkeypatch):
     """Redirect state_dir() to a tmp_path via XDG_STATE_HOME override."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv(
-        "CLAUDE_SESSION_CAPTURE_STATE_ROOT", str(tmp_path / "state" / "claude-session-capture")
+        "CLAUDE_SESSION_CAPTURE_STATE_ROOT", str(tmp_path / "state" / "ai-session-capture")
     )
     # platformdirs reads XDG_STATE_HOME; our fallback reads ~/.local/state; we
     # force both to the tmp path by monkeypatching Path.home() too.
@@ -26,8 +26,6 @@ def test_atomic_write_creates_file_with_0600(tmp_path):
     path = tmp_path / "out.md"
     st.atomic_write_text(path, "hello")
     assert path.read_text() == "hello"
-    import stat
-
     mode = path.stat().st_mode & 0o777
     assert mode == 0o600
 

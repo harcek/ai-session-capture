@@ -1,6 +1,6 @@
 [Unit]
-Description=claude-session-capture daily run
-Documentation=https://github.com/harcek/claude-session-capture
+Description=ai-session-capture daily run
+Documentation=https://github.com/harcek/ai-session-capture
 After=default.target
 
 [Service]
@@ -19,7 +19,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/claude-sessions %h/.local/state/claude-session-capture
+ReadWritePaths=%h/.local/share/ai-sessions %h/.local/state/ai-session-capture
 ReadOnlyPaths=%h/.claude
 LockPersonality=true
 RestrictRealtime=true

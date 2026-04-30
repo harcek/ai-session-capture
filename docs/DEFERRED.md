@@ -124,11 +124,12 @@ abstraction" into "obvious right shape":
 `if ptype == "function_call"`, `kind="user"`, `source="claude"`).
 Type-safety improvement.
 
-**Why deferred:** the v0.2.0 rename to `ai-session-capture` will
-reorganize parser modules and is the natural moment to introduce
-shared `RecordKind`, `RecordSource`, and per-adapter envelope enums.
-Doing it alongside the rename is one diff; doing it now would be a
-preliminary refactor that gets re-touched.
+**Why deferred:** still deferred after the v0.2.0 rename — the
+rename was mechanical and didn't reshape the parser internals.
+A third adapter (OpenCode) is the natural trigger: at three call
+sites the right enum surface will be obvious. Today's pair of
+adapters share enough that adding enums would be one-shot work
+without an external pull on the design.
 
 ### Table-driven dispatch in `parse_codex_file`
 
@@ -136,10 +137,10 @@ preliminary refactor that gets re-touched.
 if-ptype → if-isinstance(content) → for-block → if-btype). A
 `HANDLERS: dict[(rtype, ptype), Callable]` table would flatten it.
 
-**Why deferred:** the schema may shift once we factor a shared
-`adapter` interface during the rename. Worth waiting until the
-abstraction shape is clear rather than building a table-driven
-dispatch that the refactor invalidates.
+**Why deferred:** still deferred — same trigger as the StrEnum
+item. Until OpenCode lands, the Codex schema is stable enough that
+a table refactor would be cosmetic. Once a third adapter forces a
+shared `adapter` interface, the table shape will be load-bearing.
 
 ### `ToolCallTracker` extraction
 

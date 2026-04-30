@@ -6,17 +6,17 @@ the SQLite FTS index built by ``search.py``; no writes, no shell-outs,
 no network.
 
 Requires the optional ``mcp`` dependency:
-    pip install claude-session-capture[mcp]
+    pip install ai-session-capture[mcp]
 
 Run:
-    claude-session-capture mcp-serve
+    ai-session-capture mcp-serve
 
 Wire into Claude Code (``~/.claude/settings.json``):
 
     {
       "mcpServers": {
-        "claude-sessions": {
-          "command": "claude-session-capture",
+        "ai-sessions": {
+          "command": "ai-session-capture",
           "args": ["mcp-serve"]
         }
       }
@@ -32,7 +32,7 @@ from typing import Any
 from . import search as search_mod
 
 
-SERVER_NAME = "claude-session-capture"
+SERVER_NAME = "ai-session-capture"
 SERVER_VERSION = "0.2.0"
 
 

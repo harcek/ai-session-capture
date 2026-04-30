@@ -1,6 +1,6 @@
 """Command-line interface — the one entrypoint the scheduler calls.
 
-``claude-session-capture daily`` is the cron/timer path; it renders
+``ai-session-capture daily`` is the cron/timer path; it renders
 yesterday's local-date and writes to the output repo, idempotent by
 content hash. ``backfill`` walks every historical JSONL and emits a file
 per distinct date. ``--dry-run`` and ``--show-redactions`` are inspection
@@ -40,6 +40,7 @@ from .render import (
 from .state import (
     clear_last_error,
     flock_exclusive,
+    migrate_data_dir,
     notify_failure,
     setup_logging,
     state_dir,
@@ -406,7 +407,7 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="claude-session-capture",
+        prog="ai-session-capture",
         description="Capture Claude Code sessions into a daily Markdown archive.",
     )
     p.add_argument(
@@ -495,8 +496,10 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # noqa: BLE001
         logger.exception("config load failed")
         write_last_error(f"config load failed: {e}")
-        notify_failure("claude-session-capture", f"config load failed: {e}")
+        notify_failure("ai-session-capture", f"config load failed: {e}")
         return 2
+
+    migrate_data_dir(cfg)
 
     # Apply configured log level if --verbose isn't forcing debug
     if not args.verbose:
@@ -534,7 +537,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # noqa: BLE001
         logger.exception("run failed")
         write_last_error(str(e))
-        notify_failure("claude-session-capture", f"run failed: {e}")
+        notify_failure("ai-session-capture", f"run failed: {e}")
         return 1
 
     if rc == 0:
