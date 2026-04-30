@@ -293,12 +293,16 @@ def render_session_file(
         frontmatter_enabled=cfg.output.frontmatter.enabled,
     )
 
+    # source is uniform within a session (set by the parser); pull it from
+    # any record. Falls back to "claude" via Record's default.
+    source = next((r.source for r in filtered if r.source), "claude")
     naming = SessionNaming(
         session_id=session_id,
         project_raw=project_raw,
         first_ts=first_ts,
         custom_title=safe_title_source,
         first_prompt=safe_first_prompt,
+        source=source,
     )
     relpath = session_relpath(naming, cfg, tz)
 

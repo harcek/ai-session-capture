@@ -159,7 +159,11 @@ def test_session_relpath_per_project_dirs():
         first_prompt=None,
     )
     rel = session_relpath(naming, cfg, UTC)
-    assert str(rel) == "sessions/deep-value-scanner/2026-04-20_13-21_60651cdb_testing.md"
+    # Layout: sessions/<source>/<project>/<file>.md (ADR-0005)
+    assert str(rel) == (
+        "sessions/claude/deep-value-scanner/"
+        "2026-04-20_13-21_60651cdb_testing.md"
+    )
 
 
 def test_session_relpath_flat_when_disabled():
@@ -173,7 +177,21 @@ def test_session_relpath_flat_when_disabled():
         first_prompt=None,
     )
     rel = session_relpath(naming, cfg, UTC)
-    assert str(rel) == "sessions/2026-04-20_13-21_60651cdb_note.md"
+    assert str(rel) == "sessions/claude/2026-04-20_13-21_60651cdb_note.md"
+
+
+def test_session_relpath_uses_source_segment():
+    cfg = Config()
+    naming = SessionNaming(
+        session_id="abcdef12",
+        project_raw="some-project",
+        first_ts=datetime(2026, 4, 20, 10, 0, tzinfo=UTC),
+        custom_title=None,
+        first_prompt=None,
+        source="codex",
+    )
+    rel = session_relpath(naming, cfg, UTC)
+    assert str(rel).startswith("sessions/codex/some-project/")
 
 
 def test_daily_index_relpath():

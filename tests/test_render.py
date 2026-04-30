@@ -230,8 +230,9 @@ def test_render_daily_index_lists_touching_sessions():
     assert "| 09:00:00 |" in idx.markdown
     assert "| 14:00:00 |" in idx.markdown
     # Wiki-link uses ../sessions/<project>/<stem>
-    assert "[[../sessions/proj/" in idx.markdown
-    assert "[[../sessions/other/" in idx.markdown
+    # Layout: sessions/<source>/<project>/ (ADR-0005)
+    assert "[[../sessions/claude/proj/" in idx.markdown
+    assert "[[../sessions/claude/other/" in idx.markdown
 
 
 def test_render_daily_index_excludes_sessions_not_touching_that_day():

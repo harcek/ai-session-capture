@@ -298,6 +298,132 @@ def test_search_limit_is_clamped(db, value, expected_min, expected_max):
         assert n <= expected_max
 
 
+def test_source_field_filters_search(db):
+    """search(source=...) returns only rows from that source; default = union."""
+    rows = [
+        S.SessionIndexRow(
+            id="sa", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="alpha shared",
+            source="claude",
+        ),
+        S.SessionIndexRow(
+            id="sb", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="beta shared",
+            source="codex",
+        ),
+    ]
+    S.upsert_rows(rows, path=db)
+
+    union = S.search("shared", path=db)
+    assert {r.session_id for r in union} == {"sa", "sb"}
+    assert {r.source for r in union} == {"claude", "codex"}
+
+    only_codex = S.search("shared", source="codex", path=db)
+    assert {r.session_id for r in only_codex} == {"sb"}
+    assert {r.source for r in only_codex} == {"codex"}
+
+
+def test_same_session_id_across_sources_no_collision(db):
+    """A session UUID can theoretically repeat across sources; both should
+    upsert independently and stay distinct in the index."""
+    rows = [
+        S.SessionIndexRow(
+            id="shared-uuid", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="from claude",
+            source="claude",
+        ),
+        S.SessionIndexRow(
+            id="shared-uuid", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="from codex",
+            source="codex",
+        ),
+    ]
+    S.upsert_rows(rows, path=db)
+    hits = S.search("from", path=db)
+    by_source = {r.source: r for r in hits}
+    assert "claude" in by_source
+    assert "codex" in by_source
+
+
+def test_list_recent_filters_by_source(db):
+    rows = [
+        S.SessionIndexRow(
+            id=f"s{i}", date=f"2026-04-{i:02d}", project="p", cwd="",
+            first_ts="", turn_count=1, redactions_total=0,
+            content=f"content {i}",
+            source="claude" if i % 2 else "codex",
+        )
+        for i in (18, 19, 20, 21)
+    ]
+    S.upsert_rows(rows, path=db)
+    only_codex = S.list_recent(limit=10, source="codex", path=db)
+    assert all(r["source"] == "codex" for r in only_codex)
+    assert {r["session_id"] for r in only_codex} == {"s18", "s20"}
+
+
+def test_get_session_text_with_source_disambiguator(db):
+    rows = [
+        S.SessionIndexRow(
+            id="dup", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="claude side",
+            source="claude",
+        ),
+        S.SessionIndexRow(
+            id="dup", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="codex side",
+            source="codex",
+        ),
+    ]
+    S.upsert_rows(rows, path=db)
+    cx = S.get_session_text("dup", source="codex", path=db)
+    assert cx is not None
+    assert cx["content"] == "codex side"
+    assert cx["source"] == "codex"
+
+
+def test_legacy_db_migrates_to_source_column(tmp_path):
+    """A pre-source-column DB should gain the column on first connect."""
+    import sqlite3
+    db = tmp_path / "old.db"
+    # Create the legacy schema (no `source` column)
+    legacy = sqlite3.connect(str(db))
+    legacy.executescript("""
+        CREATE TABLE sessions (
+            id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            project TEXT,
+            cwd TEXT,
+            first_ts TEXT,
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            redactions_total INTEGER NOT NULL DEFAULT 0,
+            content_hash TEXT NOT NULL,
+            indexed_at TEXT NOT NULL,
+            PRIMARY KEY (id, date)
+        );
+    """)
+    legacy.execute(
+        "INSERT INTO sessions (id, date, project, cwd, first_ts, "
+        "turn_count, redactions_total, content_hash, indexed_at) "
+        "VALUES ('legacy', '2026-04-01', 'p', '', '', 1, 0, 'h', 'now')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    # Connect via our manager — migration runs
+    with S.connect(db) as conn:
+        cols = [
+            r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        ]
+    assert "source" in cols
+
+    # Pre-existing row keeps the default source
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT source FROM sessions WHERE id='legacy'").fetchone()
+    conn.close()
+    assert row["source"] == "claude"
+
+
 def test_fts_phrase_and_prefix_queries(db):
     cfg = Config()
     records = [

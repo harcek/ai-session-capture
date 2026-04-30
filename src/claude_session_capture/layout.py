@@ -63,6 +63,7 @@ class SessionNaming:
     first_ts: datetime | None
     custom_title: str | None
     first_prompt: str | None
+    source: str = "claude"
 
 
 def session_filename(naming: SessionNaming, cfg: Config, tz: ZoneInfo) -> str:
@@ -101,12 +102,20 @@ def session_filename(naming: SessionNaming, cfg: Config, tz: ZoneInfo) -> str:
 
 
 def session_relpath(naming: SessionNaming, cfg: Config, tz: ZoneInfo) -> PurePosixPath:
-    """Full relative path under the output dir for a session file."""
+    """Full relative path under the output dir for a session file.
+
+    Layout: ``sessions/<source>/<project>/<file>.md`` (with the
+    ``<project>/`` segment elided when ``per_project_dirs = false``).
+    The ``<source>/`` segment lets per-source archives be wiped or
+    rebuilt independently — see ADR-0005.
+    """
     project = sanitize_project(naming.project_raw, cfg)
+    source = naming.source or "claude"
     fname = session_filename(naming, cfg, tz)
+    base = PurePosixPath("sessions") / source
     if cfg.session_files.per_project_dirs:
-        return PurePosixPath("sessions") / project / fname
-    return PurePosixPath("sessions") / fname
+        return base / project / fname
+    return base / fname
 
 
 def daily_index_relpath(d: date) -> PurePosixPath:

@@ -25,10 +25,14 @@ from .parser import Record
 from .redact import RedactionReport, redact
 
 
-SCHEMA = """
+# Split into pre/post-migration so column-adding migrations run between
+# the table creation and the index/FTS creation that *depends* on the
+# new column.
+_SCHEMA_TABLES = """
 CREATE TABLE IF NOT EXISTS sessions (
     id               TEXT NOT NULL,
     date             TEXT NOT NULL,
+    source           TEXT NOT NULL DEFAULT 'claude',
     project          TEXT,
     cwd              TEXT,
     first_ts         TEXT,
@@ -36,15 +40,25 @@ CREATE TABLE IF NOT EXISTS sessions (
     redactions_total INTEGER NOT NULL DEFAULT 0,
     content_hash     TEXT NOT NULL,
     indexed_at       TEXT NOT NULL,
-    PRIMARY KEY (id, date)
+    PRIMARY KEY (id, date, source)
 );
+"""
 
+# Idempotent: ALTER TABLE ADD COLUMN raises if the column already exists;
+# we catch the "duplicate column" error and ignore it.
+_MIGRATIONS = [
+    "ALTER TABLE sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'claude'",
+]
+
+_SCHEMA_INDEXES_AND_FTS = """
 CREATE INDEX IF NOT EXISTS idx_sessions_date    ON sessions(date);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+CREATE INDEX IF NOT EXISTS idx_sessions_source  ON sessions(source);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
     session_id UNINDEXED,
     date UNINDEXED,
+    source UNINDEXED,
     project,
     content,
     tokenize = "porter unicode61 remove_diacritics 2"
@@ -78,7 +92,28 @@ def connect(path: Path | None = None):
     conn = sqlite3.connect(str(p))
     conn.row_factory = sqlite3.Row
     try:
-        conn.executescript(SCHEMA)
+        # 1. Tables first — creates if missing, no-op on existing.
+        conn.executescript(_SCHEMA_TABLES)
+        # 2. Migrations — add columns to pre-existing legacy tables. Must
+        # run BEFORE indexes that reference the new column.
+        for stmt in _MIGRATIONS:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+        # 3. Drop legacy sessions_fts if it exists without the new
+        # `source` column (FTS5 virtual tables can't be ALTERed; safe to
+        # rebuild because upsert paths re-populate from the structured
+        # `sessions` table on next run).
+        cols = [
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(sessions_fts)").fetchall()
+        ]
+        if cols and "source" not in cols:
+            conn.execute("DROP TABLE sessions_fts")
+        # 4. Indexes + (re-)created FTS table.
+        conn.executescript(_SCHEMA_INDEXES_AND_FTS)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         yield conn
@@ -97,6 +132,7 @@ class SessionIndexRow:
     turn_count: int
     redactions_total: int
     content: str
+    source: str = "claude"
 
 
 def _to_local_date(ts: datetime | None, tz: ZoneInfo) -> date | None:
@@ -164,12 +200,16 @@ def build_session_rows(
         first_ts = next((r.timestamp for r in recs if r.timestamp), None)
         # Use the aliased + sanitized project name so the FTS index agrees
         # with the filesystem layout — --project filters and MCP queries
-        # take the same name the user sees in sessions/<project>/.
+        # take the same name the user sees in sessions/<source>/<project>/.
         raw_project = (recs[0].project or "") if recs else ""
+        # source is per-session (uniform within a session); take from the
+        # first record. Defaults to "claude" via Record's default.
+        source = (recs[0].source or "claude") if recs else "claude"
         out.append(
             SessionIndexRow(
                 id=sid,
                 date=d.isoformat(),
+                source=source,
                 project=sanitize_project(raw_project, cfg),
                 cwd=next((r.cwd for r in recs if r.cwd), ""),
                 first_ts=(first_ts.astimezone(tz).isoformat() if first_ts else ""),
@@ -183,7 +223,7 @@ def build_session_rows(
 
 def _content_hash(row: SessionIndexRow) -> str:
     # Hash what we actually index, so hash changes iff searchable text changes.
-    payload = f"{row.project}\n{row.cwd}\n{row.turn_count}\n{row.content}"
+    payload = f"{row.source}\n{row.project}\n{row.cwd}\n{row.turn_count}\n{row.content}"
     return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
 
 
@@ -208,45 +248,50 @@ def upsert_rows(
     orphans = 0
     now = datetime.now(UTC).isoformat()
 
-    new_dates_by_session: dict[str, set[str]] = {}
+    # Orphan sweep is now scoped per (session_id, source) — same session
+    # id can theoretically appear under different sources (uuid collision
+    # across vendors) without one wiping the other.
+    new_dates_by_key: dict[tuple[str, str], set[str]] = {}
     for row in rows:
-        new_dates_by_session.setdefault(row.id, set()).add(row.date)
+        new_dates_by_key.setdefault((row.id, row.source), set()).add(row.date)
 
     with connect(path) as conn:
-        # Orphan sweep: for each session in the new input, delete any
-        # existing rows whose date isn't in the new set.
-        for sid, new_dates in new_dates_by_session.items():
+        for (sid, src), new_dates in new_dates_by_key.items():
             existing_dates = {
                 r["date"]
                 for r in conn.execute(
-                    "SELECT date FROM sessions WHERE id = ?", (sid,)
+                    "SELECT date FROM sessions WHERE id = ? AND source = ?",
+                    (sid, src),
                 ).fetchall()
             }
             stale = existing_dates - new_dates
             for d in stale:
                 conn.execute(
-                    "DELETE FROM sessions WHERE id = ? AND date = ?", (sid, d)
+                    "DELETE FROM sessions WHERE id = ? AND date = ? AND source = ?",
+                    (sid, d, src),
                 )
                 conn.execute(
-                    "DELETE FROM sessions_fts WHERE session_id = ? AND date = ?",
-                    (sid, d),
+                    "DELETE FROM sessions_fts "
+                    "WHERE session_id = ? AND date = ? AND source = ?",
+                    (sid, d, src),
                 )
                 orphans += 1
 
         for row in rows:
             new_hash = _content_hash(row)
             existing = conn.execute(
-                "SELECT content_hash FROM sessions WHERE id = ? AND date = ?",
-                (row.id, row.date),
+                "SELECT content_hash FROM sessions "
+                "WHERE id = ? AND date = ? AND source = ?",
+                (row.id, row.date, row.source),
             ).fetchone()
             if existing and existing["content_hash"] == new_hash:
                 skipped += 1
                 continue
             conn.execute(
-                """INSERT INTO sessions (id, date, project, cwd, first_ts,
+                """INSERT INTO sessions (id, date, source, project, cwd, first_ts,
                        turn_count, redactions_total, content_hash, indexed_at)
-                   VALUES (?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(id, date) DO UPDATE SET
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id, date, source) DO UPDATE SET
                        project          = excluded.project,
                        cwd              = excluded.cwd,
                        first_ts         = excluded.first_ts,
@@ -257,6 +302,7 @@ def upsert_rows(
                 (
                     row.id,
                     row.date,
+                    row.source,
                     row.project,
                     row.cwd,
                     row.first_ts,
@@ -266,15 +312,15 @@ def upsert_rows(
                     now,
                 ),
             )
-            # Remove any prior FTS row for this (session, date) before inserting.
             conn.execute(
-                "DELETE FROM sessions_fts WHERE session_id = ? AND date = ?",
-                (row.id, row.date),
+                "DELETE FROM sessions_fts "
+                "WHERE session_id = ? AND date = ? AND source = ?",
+                (row.id, row.date, row.source),
             )
             conn.execute(
-                """INSERT INTO sessions_fts (session_id, date, project, content)
-                   VALUES (?,?,?,?)""",
-                (row.id, row.date, row.project, row.content),
+                """INSERT INTO sessions_fts (session_id, date, source, project, content)
+                   VALUES (?,?,?,?,?)""",
+                (row.id, row.date, row.source, row.project, row.content),
             )
             inserted += 1
     return inserted, skipped, orphans
@@ -301,6 +347,7 @@ class SearchResult:
     turn_count: int
     redactions_total: int
     snippet: str
+    source: str = "claude"
 
 
 SEARCH_LIMIT_MIN = 1
@@ -329,6 +376,7 @@ def search(
     query: str,
     *,
     project: str | None = None,
+    source: str | None = None,
     since: date | None = None,
     until: date | None = None,
     limit: int = SEARCH_LIMIT_DEFAULT,
@@ -338,13 +386,17 @@ def search(
 
     Invalid FTS syntax raises :class:`FTSSyntaxError` with the original
     SQLite message (no traceback noise at the call site). ``limit`` is
-    clamped to ``[1, 1000]``.
+    clamped to ``[1, 1000]``. ``source`` filters by adapter
+    (``"claude"`` / ``"codex"`` / …); ``None`` means union.
     """
     conditions = ["sessions_fts MATCH ?"]
     params: list[object] = [query]
     if project:
         conditions.append("s.project = ?")
         params.append(project)
+    if source:
+        conditions.append("s.source = ?")
+        params.append(source)
     if since:
         conditions.append("s.date >= ?")
         params.append(since.isoformat())
@@ -355,16 +407,18 @@ def search(
     sql = f"""
         SELECT s.id AS session_id,
                s.date,
+               s.source,
                s.project,
                s.cwd,
                s.first_ts,
                s.turn_count,
                s.redactions_total,
-               snippet(sessions_fts, 3, '[', ']', ' … ', 24) AS snip
+               snippet(sessions_fts, 4, '[', ']', ' … ', 24) AS snip
         FROM sessions_fts
         JOIN sessions s
           ON s.id = sessions_fts.session_id
          AND s.date = sessions_fts.date
+         AND s.source = sessions_fts.source
         WHERE {" AND ".join(conditions)}
         ORDER BY s.date DESC, s.first_ts DESC
         LIMIT ?
@@ -398,6 +452,7 @@ def search(
         SearchResult(
             session_id=r["session_id"],
             date=r["date"],
+            source=r["source"] or "claude",
             project=r["project"] or "",
             cwd=r["cwd"] or "",
             first_ts=r["first_ts"] or "",
@@ -409,35 +464,55 @@ def search(
     ]
 
 
-def list_projects(path: Path | None = None) -> list[dict]:
-    """Distinct project names with session counts, most-active first."""
+def list_projects(
+    source: str | None = None, path: Path | None = None
+) -> list[dict]:
+    """Distinct project names with session counts, most-active first.
+
+    Optionally filter by ``source`` (``"claude"`` / ``"codex"`` / …);
+    ``None`` (default) means union across sources.
+    """
+    sql = """
+        SELECT project, source, COUNT(*) AS n,
+               MIN(date) AS earliest, MAX(date) AS latest
+        FROM sessions
+        WHERE project IS NOT NULL AND project != ''
+    """
+    params: list[object] = []
+    if source:
+        sql += " AND source = ? "
+        params.append(source)
+    sql += " GROUP BY project, source ORDER BY n DESC"
     with connect(path) as conn:
-        rows = conn.execute(
-            """SELECT project, COUNT(*) AS n, MIN(date) AS earliest, MAX(date) AS latest
-               FROM sessions
-               WHERE project IS NOT NULL AND project != ''
-               GROUP BY project
-               ORDER BY n DESC"""
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
 def list_recent(
-    limit: int = 10, project: str | None = None, path: Path | None = None
+    limit: int = 10,
+    project: str | None = None,
+    source: str | None = None,
+    path: Path | None = None,
 ) -> list[dict]:
-    """Most-recent sessions by date + first_ts, optionally filtered by project.
+    """Most-recent sessions by date + first_ts, optionally filtered.
 
     ``limit`` is clamped to ``[1, 1000]``.
     """
     sql = """
-        SELECT id AS session_id, date, project, cwd, first_ts,
+        SELECT id AS session_id, date, source, project, cwd, first_ts,
                turn_count, redactions_total
         FROM sessions
     """
     params: list[object] = []
+    where: list[str] = []
     if project:
-        sql += " WHERE project = ? "
+        where.append("project = ?")
         params.append(project)
+    if source:
+        where.append("source = ?")
+        params.append(source)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY date DESC, first_ts DESC LIMIT ?"
     params.append(_clamp_limit(limit))
     with connect(path) as conn:
@@ -446,21 +521,33 @@ def list_recent(
 
 
 def get_session_text(
-    session_id: str, date_str: str | None = None, path: Path | None = None
+    session_id: str,
+    date_str: str | None = None,
+    source: str | None = None,
+    path: Path | None = None,
 ) -> dict | None:
-    """Fetch the full indexed text for a session (optionally pinned to a date)."""
+    """Fetch the full indexed text for a session.
+
+    Optionally pin to a ``date_str`` and/or ``source`` (useful when a
+    session id might collide across sources).
+    """
     sql = """
-        SELECT s.id AS session_id, s.date, s.project, s.cwd, s.first_ts,
-               s.turn_count, s.redactions_total, f.content
+        SELECT s.id AS session_id, s.date, s.source, s.project, s.cwd,
+               s.first_ts, s.turn_count, s.redactions_total, f.content
         FROM sessions s
         JOIN sessions_fts f
-          ON f.session_id = s.id AND f.date = s.date
+          ON f.session_id = s.id
+         AND f.date = s.date
+         AND f.source = s.source
         WHERE s.id = ?
     """
     params: list[object] = [session_id]
     if date_str:
         sql += " AND s.date = ?"
         params.append(date_str)
+    if source:
+        sql += " AND s.source = ?"
+        params.append(source)
     sql += " ORDER BY s.date DESC LIMIT 1"
     with connect(path) as conn:
         row = conn.execute(sql, params).fetchone()
