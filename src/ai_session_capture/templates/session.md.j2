@@ -11,8 +11,10 @@ turn_count: {{ turn_count }}
 redactions:
 {% for label, count in redactions.counts.items() | sort %}  {{ label }}: {{ count }}
 {% endfor %}{% endif %}source: {{ source }}
+machine: {{ machine }}
 tags:
   - {{ source }}-session
+  - machine/{{ machine }}
   - project/{{ project }}
 ---
 

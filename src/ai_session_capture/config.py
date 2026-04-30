@@ -88,6 +88,15 @@ class LoggingConfig:
 
 
 @dataclass
+class MachineConfig:
+    # Stable identity for this machine inside the multi-machine archive.
+    # Empty → resolve_machine_name() falls back to a sanitized
+    # socket.gethostname(). Set explicitly when the hostname is
+    # unstable (e.g. ".local" suffix flips, OS-managed renames).
+    name: str = ""
+
+
+@dataclass
 class Config:
     granularity: GranularityConfig = field(default_factory=GranularityConfig)
     content: ContentConfig = field(default_factory=ContentConfig)
@@ -98,6 +107,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     session_files: SessionFilesConfig = field(default_factory=SessionFilesConfig)
     projects: ProjectsConfig = field(default_factory=ProjectsConfig)
+    machine: MachineConfig = field(default_factory=MachineConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Config":

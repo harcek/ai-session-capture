@@ -146,3 +146,115 @@ def test_setup_logging_verbose_forces_debug():
     logging.getLogger("csc").handlers.clear()
     logger = st.setup_logging(verbose=True)
     assert logger.level == logging.DEBUG
+
+
+# --- resolve_machine_name -------------------------------------------------
+
+
+def test_resolve_machine_name_from_config():
+    """Explicit cfg.machine.name wins, lowercased + sanitized."""
+    from ai_session_capture.config import Config
+    cfg = Config()
+    cfg.machine.name = "MBP-Daniel"
+    assert st.resolve_machine_name(cfg) == "mbp-daniel"
+
+
+def test_resolve_machine_name_strips_dot_local():
+    """Hostnames like `mbp.local` collapse to `mbp` so a Mac that
+    flips between `.local` and bare hostname doesn't fragment the
+    archive."""
+    from ai_session_capture.config import Config
+    cfg = Config()
+    cfg.machine.name = "Daniels-MBP.local"
+    assert st.resolve_machine_name(cfg) == "daniels-mbp"
+
+
+def test_resolve_machine_name_sanitizes_disallowed_chars():
+    """Anything outside [a-z0-9_-] collapses to a single dash."""
+    from ai_session_capture.config import Config
+    cfg = Config()
+    cfg.machine.name = "host name!!  with$weird/chars"
+    assert st.resolve_machine_name(cfg) == "host-name-with-weird-chars"
+
+
+def test_resolve_machine_name_falls_back_to_hostname(monkeypatch):
+    """Empty cfg.machine.name → socket.gethostname()."""
+    from ai_session_capture.config import Config
+    monkeypatch.setattr("socket.gethostname", lambda: "WORKSTATION.local")
+    cfg = Config()
+    assert st.resolve_machine_name(cfg) == "workstation"
+
+
+def test_resolve_machine_name_blank_falls_back_to_unknown(monkeypatch):
+    """If both cfg and hostname are blank, return `unknown` so paths
+    are never empty (path-traversal-adjacent footgun)."""
+    from ai_session_capture.config import Config
+    monkeypatch.setattr("socket.gethostname", lambda: "")
+    cfg = Config()
+    assert st.resolve_machine_name(cfg) == "unknown"
+
+
+# --- migrate_archive_to_per_machine ---------------------------------------
+
+
+def test_migrate_archive_moves_legacy_layout(tmp_path):
+    """A v0.2.0 archive (sessions/<source>/ + flat daily/<date>.md)
+    is reshaped into v0.3.0's per-machine subtrees."""
+    from ai_session_capture.config import Config
+
+    output = tmp_path / "out"
+    sessions = output / "sessions"
+    daily = output / "daily"
+    (sessions / "claude" / "proj").mkdir(parents=True)
+    (sessions / "claude" / "proj" / "session.md").write_text("hi")
+    (sessions / "codex" / "proj2").mkdir(parents=True)
+    (sessions / "codex" / "proj2" / "s.md").write_text("hi")
+    daily.mkdir()
+    (daily / "2026-04-29.md").write_text("legacy daily")
+    (daily / "2026-04-30.md").write_text("legacy daily")
+
+    cfg = Config()
+    cfg.output.dir = str(output)
+    st.migrate_archive_to_per_machine(cfg, "mbp")
+
+    # Sessions: legacy <source>/ moved under <machine>/<source>/
+    assert (sessions / "mbp" / "claude" / "proj" / "session.md").exists()
+    assert (sessions / "mbp" / "codex" / "proj2" / "s.md").exists()
+    assert not (sessions / "claude").exists()
+    assert not (sessions / "codex").exists()
+    # Daily: flat MDs moved under daily/<machine>/
+    assert (daily / "mbp" / "2026-04-29.md").exists()
+    assert (daily / "mbp" / "2026-04-30.md").exists()
+    assert not (daily / "2026-04-29.md").exists()
+
+
+def test_migrate_archive_is_idempotent(tmp_path):
+    """Re-running the migration on an already-migrated archive
+    leaves it untouched (no-op)."""
+    from ai_session_capture.config import Config
+
+    output = tmp_path / "out"
+    sessions = output / "sessions"
+    daily = output / "daily"
+    (sessions / "mbp" / "claude" / "proj").mkdir(parents=True)
+    (sessions / "mbp" / "claude" / "proj" / "session.md").write_text("hi")
+    (daily / "mbp").mkdir(parents=True)
+    (daily / "mbp" / "2026-04-29.md").write_text("daily")
+
+    cfg = Config()
+    cfg.output.dir = str(output)
+    st.migrate_archive_to_per_machine(cfg, "mbp")
+    st.migrate_archive_to_per_machine(cfg, "mbp")  # no-op second pass
+
+    assert (sessions / "mbp" / "claude" / "proj" / "session.md").exists()
+    assert (daily / "mbp" / "2026-04-29.md").exists()
+
+
+def test_migrate_archive_no_output_dir(tmp_path):
+    """Missing output dir is a no-op rather than an error — first run
+    on a fresh machine has no archive yet."""
+    from ai_session_capture.config import Config
+
+    cfg = Config()
+    cfg.output.dir = str(tmp_path / "does-not-exist")
+    st.migrate_archive_to_per_machine(cfg, "mbp")  # must not raise

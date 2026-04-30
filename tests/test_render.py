@@ -218,9 +218,9 @@ def test_render_session_file_empty_session_has_no_slug():
 
 def test_render_daily_index_empty():
     cfg = Config()
-    r = render_daily_index(date(2026, 4, 20), [], cfg, tz=UTC)
+    r = render_daily_index(date(2026, 4, 20), [], cfg, tz=UTC, machine="mbp")
     assert "No sessions touched this day" in r.markdown
-    assert str(r.relpath) == "daily/2026-04-20.md"
+    assert str(r.relpath) == "daily/mbp/2026-04-20.md"
 
 
 def test_render_daily_index_lists_touching_sessions():
@@ -242,15 +242,17 @@ def test_render_daily_index_lists_touching_sessions():
         cfg,
         tz=UTC,
         all_records=records,
+        machine="mbp",
     )
     assert "s1"[:8] in idx.markdown
     assert "s2"[:8] in idx.markdown
     assert "| 09:00:00 |" in idx.markdown
     assert "| 14:00:00 |" in idx.markdown
-    # Wiki-link uses ../sessions/<project>/<stem>
-    # Layout: sessions/<source>/<project>/ (ADR-0005)
-    assert "[[../sessions/claude/proj/" in idx.markdown
-    assert "[[../sessions/claude/other/" in idx.markdown
+    # Daily lives at daily/<machine>/<date>.md and sessions live at
+    # sessions/<machine>/<source>/<project>/ — link path needs two
+    # ../ to reach the data-repo root (ADR-0006).
+    assert "[[../../sessions/unknown/claude/proj/" in idx.markdown
+    assert "[[../../sessions/unknown/claude/other/" in idx.markdown
 
 
 def test_render_daily_index_excludes_sessions_not_touching_that_day():

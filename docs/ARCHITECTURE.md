@@ -12,6 +12,13 @@ producing the same `Record` type. Future adapters (OpenCode, …) are
 sibling parser modules that reuse everything downstream of the
 parser layer.
 
+Sessions are partitioned by `(machine, source)` end-to-end: file
+layout, FTS rows, MCP results. The machine identity comes from
+`[machine].name` in config (or sanitized hostname); see
+[ADR-0006](adr/0006-multi-machine-ingestion.md). This makes the
+data repo safely shareable across multiple hosts — each machine
+writes only under its own subtree.
+
 ## Pipeline
 
 ```
@@ -39,7 +46,7 @@ parser layer.
             │                 (skip write if unchanged), atomic
             │                 tmp+rename, 0o600 mode, flock-guarded
             ▼
- ~/.local/share/ai-sessions/sessions/<source>/<project>/<file>.md
+ ~/.local/share/ai-sessions/sessions/<machine>/<source>/<project>/<file>.md
                                        (output, private git repo)
 ```
 

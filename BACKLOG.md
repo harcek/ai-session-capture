@@ -17,48 +17,32 @@ here when a concrete motivating use case arrives.
 
 ## 🔜 Next-up
 
-### #A — OpenCode transcript adapter
+### #A — Private remote + auto-push
 
-Same pattern as the Codex adapter shipped in v0.2.0: a sibling parser
-module (`opencode_parser.py`) producing `Record(source="opencode")`
-instances, reusing the shared redact / render / state / search /
-mcp_server pipeline. Different transcript shape; mechanical to add
-once the format is reverse-engineered.
+Wire a private git remote for the data repo; daily runs optionally
+commit and push after writing. With v0.3.0's per-machine layout in
+place, push collisions are gone — each machine writes only under
+`sessions/<this-machine>/`. Open question: sync approach (Syncthing
+vs. own SSH hub vs. private GitHub) — evaluate against the
+operator's threat model before wiring the push logic. After this
+lands, running `search --rebuild` after `git pull` reindexes every
+machine's captures from any host.
+
+- Depends on: nothing shipped.
+- Estimated effort: S (a few hours once the remote is decided).
+
+### #B — OpenCode transcript adapter
+
+Same pattern as the Codex adapter shipped in v0.2.0: a sibling
+parser module (`opencode_parser.py`) producing
+`Record(source="opencode")` instances, reusing the shared redact /
+render / state / search / mcp_server pipeline. Different transcript
+shape; mechanical to add once the format is reverse-engineered.
+Also the natural trigger for the StrEnum + table-dispatch
+refactors deferred during /simplify.
 
 - Depends on: nothing shipped. Reuses ADR-0005's adapter pattern.
 - Estimated effort: M (1–2 days including format research).
-
-### #B — Multi-machine ingestion
-
-Support multiple roots per source (e.g. each of your machines
-contributes its own `~/.claude/projects/` and `~/.codex/sessions/`),
-with provenance preserved in the archive. v0.2.0 adds the `source`
-discriminator (per-tool); this adds a `machine` discriminator
-alongside it. Useful for unified archives across a laptop +
-workstation + Mac mini setup.
-
-Rough shape:
-
-```toml
-[[machines.claude]]
-name = "laptop"
-root = "~/Archives/laptop-claude-projects"
-
-[[machines.claude]]
-name = "workstation"
-root = "auto"   # the current machine's default
-```
-
-- Depends on: nothing shipped.
-- Estimated effort: M (1 day).
-
-### #C — Private remote + auto-push
-
-Wire a private git remote for the data repo; daily runs optionally
-commit and push after writing. Sync approach is a prerequisite
-decision — evaluate Syncthing vs. own SSH hub vs. private GitHub
-based on the operator's threat model and available infrastructure
-before wiring the push logic.
 
 ---
 
@@ -116,6 +100,13 @@ of data to meaningfully summarize.
 
 ## Completed (for context)
 
+- **Multi-machine ingestion (ADR-0006, 0.3.0)** — `[machine]`
+  config section, `Record.machine` field, layout
+  `sessions/<machine>/<source>/<project>/`, daily index
+  `daily/<machine>/<date>.md`, FTS gains a `machine` column with PK
+  migration, `--machine` filter on CLI + MCP, `search --rebuild`
+  walks session MDs on disk so other machines' captures index
+  without their JSONL on this filesystem.
 - **Multi-source + Codex adapter + rename (ADR-0005, 0.2.0)** —
   package and CLI renamed `claude-session-capture` →
   `ai-session-capture`; second adapter (`codex_parser.py`) ingests

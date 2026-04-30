@@ -413,13 +413,189 @@ def test_legacy_db_migrates_to_source_column(tmp_path):
             r["name"] for r in conn.execute("PRAGMA table_info(sessions)").fetchall()
         ]
     assert "source" in cols
+    assert "machine" in cols
 
-    # Pre-existing row keeps the default source
+    # Pre-existing row keeps the defaults
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
-    row = conn.execute("SELECT source FROM sessions WHERE id='legacy'").fetchone()
+    row = conn.execute(
+        "SELECT source, machine FROM sessions WHERE id='legacy'"
+    ).fetchone()
     conn.close()
     assert row["source"] == "claude"
+    assert row["machine"] == "unknown"
+
+
+def test_legacy_v0_2_db_migrates_machine_pk(tmp_path):
+    """A v0.2.0 DB (PK includes source but not machine) should
+    rebuild the table to PK(id, date, source, machine) preserving
+    rows."""
+    import sqlite3
+    db = tmp_path / "v02.db"
+    legacy = sqlite3.connect(str(db))
+    legacy.executescript("""
+        CREATE TABLE sessions (
+            id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'claude',
+            project TEXT,
+            cwd TEXT,
+            first_ts TEXT,
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            redactions_total INTEGER NOT NULL DEFAULT 0,
+            content_hash TEXT NOT NULL,
+            indexed_at TEXT NOT NULL,
+            PRIMARY KEY (id, date, source)
+        );
+    """)
+    legacy.execute(
+        "INSERT INTO sessions (id, date, source, project, cwd, first_ts, "
+        "turn_count, redactions_total, content_hash, indexed_at) "
+        "VALUES ('s1', '2026-04-01', 'codex', 'p', '', '', 3, 0, 'h', 'now')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    with S.connect(db) as conn:
+        pk_cols = [
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(sessions)").fetchall()
+            if r["pk"] > 0
+        ]
+        row = conn.execute(
+            "SELECT id, source, machine FROM sessions WHERE id='s1'"
+        ).fetchone()
+    assert "machine" in pk_cols and "source" in pk_cols
+    assert row["source"] == "codex"
+    assert row["machine"] == "unknown"
+
+
+def test_search_filter_by_machine(db):
+    """A machine filter narrows results to that host's captures."""
+    rows = [
+        S.SessionIndexRow(
+            id="s1", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="banana",
+            machine="mbp",
+        ),
+        S.SessionIndexRow(
+            id="s2", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="banana",
+            machine="ubuntu",
+        ),
+    ]
+    S.upsert_rows(rows, path=db)
+    all_hits = S.search("banana", path=db)
+    mbp_hits = S.search("banana", machine="mbp", path=db)
+    assert len(all_hits) == 2
+    assert len(mbp_hits) == 1
+    assert mbp_hits[0].machine == "mbp"
+
+
+def test_parse_session_md_extracts_required_keys():
+    """A well-formed session MD round-trips through parse_session_md."""
+    md = (
+        "---\n"
+        "session_id: abc123\n"
+        "session_id_short: abc123\n"
+        "project: deep-value-scanner\n"
+        "started_at: 2026-04-20 13:21:00\n"
+        "ended_at: 2026-04-20 13:30:00\n"
+        "turn_count: 4\n"
+        "redactions_total: 2\n"
+        "redactions:\n"
+        "  AWS_AKID: 2\n"
+        "source: claude\n"
+        "machine: mbp\n"
+        "tags:\n"
+        "  - claude-session\n"
+        "  - machine/mbp\n"
+        "  - project/deep-value-scanner\n"
+        "---\n"
+        "\n"
+        "# Title\n"
+        "\n"
+        "body content here\n"
+    )
+    fm, body = S.parse_session_md(md)
+    assert fm["session_id"] == "abc123"
+    assert fm["source"] == "claude"
+    assert fm["machine"] == "mbp"
+    assert fm["project"] == "deep-value-scanner"
+    assert "body content here" in body
+
+
+def test_parse_session_md_rejects_missing_required_keys():
+    """An MD missing one of the required frontmatter keys raises so
+    a partial FTS row never lands silently."""
+    md = "---\nsession_id: x\nsource: claude\n---\nbody\n"
+    with pytest.raises(S.FrontmatterError):
+        S.parse_session_md(md)
+
+
+def test_rebuild_all_from_disk_indexes_per_machine_subtrees(tmp_path, db):
+    """Rebuild walks sessions/<machine>/<source>/<project>/*.md and
+    indexes everything it finds — even MDs from machines whose JSONL
+    isn't on this filesystem (the post-`git pull` case)."""
+    sessions = tmp_path / "sessions"
+    mbp_md = sessions / "mbp" / "claude" / "p" / "session.md"
+    ubuntu_md = sessions / "ubuntu" / "codex" / "p" / "session.md"
+    mbp_md.parent.mkdir(parents=True)
+    ubuntu_md.parent.mkdir(parents=True)
+    mbp_md.write_text(
+        "---\nsession_id: s1\nsource: claude\nmachine: mbp\nproject: p\n"
+        "started_at: 2026-04-20 10:00:00\nturn_count: 3\nredactions_total: 0\n"
+        "---\n\nclaude body about apples\n"
+    )
+    ubuntu_md.write_text(
+        "---\nsession_id: s2\nsource: codex\nmachine: ubuntu\nproject: p\n"
+        "started_at: 2026-04-21 11:00:00\nturn_count: 5\nredactions_total: 0\n"
+        "---\n\ncodex body about apples\n"
+    )
+    n, skipped = S.rebuild_all_from_disk(tmp_path, path=db)
+    assert n == 2
+    assert skipped == 0
+    hits = S.search("apples", path=db)
+    machines = {h.machine for h in hits}
+    assert machines == {"mbp", "ubuntu"}
+
+
+def test_rebuild_all_from_disk_skips_malformed_frontmatter(tmp_path, db):
+    """A malformed MD doesn't halt the whole rebuild; it's just
+    counted in `skipped`."""
+    sessions = tmp_path / "sessions"
+    good = sessions / "mbp" / "claude" / "p" / "good.md"
+    bad = sessions / "mbp" / "claude" / "p" / "bad.md"
+    good.parent.mkdir(parents=True)
+    good.write_text(
+        "---\nsession_id: s1\nsource: claude\nmachine: mbp\nproject: p\n"
+        "started_at: 2026-04-20 10:00:00\nturn_count: 1\nredactions_total: 0\n"
+        "---\n\nbody\n"
+    )
+    bad.write_text("not a session md at all")
+    n, skipped = S.rebuild_all_from_disk(tmp_path, path=db)
+    assert n == 1
+    assert skipped == 1
+
+
+def test_same_session_id_different_machines_coexist(db):
+    """Two machines may produce sessions with colliding ids; the
+    composite PK keeps both rows and FTS returns both."""
+    rows = [
+        S.SessionIndexRow(
+            id="shared", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="apple", machine="mbp",
+        ),
+        S.SessionIndexRow(
+            id="shared", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="apple", machine="ubuntu",
+        ),
+    ]
+    ins, _, _ = S.upsert_rows(rows, path=db)
+    assert ins == 2
+    hits = S.search("apple", path=db)
+    machines = {h.machine for h in hits}
+    assert machines == {"mbp", "ubuntu"}
 
 
 def test_fts_phrase_and_prefix_queries(db):

@@ -273,9 +273,12 @@ def render_session_file(
     if title:
         title = title.replace("\n", " ").strip()
 
-    # source is uniform within a session (set by the parser); pull it from
-    # any record. Falls back to "claude" via Record's default.
+    # source + machine are uniform within a session (set by the CLI from
+    # the resolved machine name and the parser's source default). Pull
+    # them from any record; fall back to defaults if every record was
+    # filtered before this point.
     source = next((r.source for r in filtered if r.source), "claude")
+    machine = next((r.machine for r in filtered if r.machine), "unknown")
 
     md = _jinja_env().get_template("session.md.j2").render(
         session_id=session_id,
@@ -287,6 +290,7 @@ def render_session_file(
         dates=[d.isoformat() for d in dates_touched],
         cwd=safe_cwd,
         source=source,
+        machine=machine,
         turns=turns,
         turn_count=len(turns),
         sidechain_count=sidechain_count,
@@ -304,6 +308,7 @@ def render_session_file(
         custom_title=safe_title_source,
         first_prompt=safe_first_prompt,
         source=source,
+        machine=machine,
     )
     relpath = session_relpath(naming, cfg, tz)
 
@@ -336,14 +341,20 @@ def render_daily_index(
     tz: ZoneInfo | None = None,
     *,
     all_records: Iterable[Record] | None = None,
+    machine: str = "",
 ) -> DailyIndexRender:
     """Build the daily index that backlinks to every session touching ``for_date``.
 
     ``session_renders`` is expected to contain every session that touched the
     target date (caller filters). ``all_records`` is optional; when
     provided, we use it to compute per-day turn counts for the index.
+
+    ``machine`` partitions the daily file under
+    ``daily/<machine>/<date>.md`` (ADR-0006). Defaults to ``"unknown"``
+    so callers without a resolved machine still produce a valid path.
     """
     tz = tz or resolve_tz(cfg)
+    machine = machine or "unknown"
 
     # Per-session turn counts + first-turn-on-this-day times
     turn_counts_today: dict[str, int] = {}
@@ -396,10 +407,13 @@ def render_daily_index(
         else:
             first_time = "—"
         label = sr.session_id[:8]
-        # Link target: the relative path from the daily/ subdir up to the session file,
-        # minus the .md extension — Obsidian resolves wiki-links by stem.
-        # From daily/2026-04-20.md the session file lives at ../sessions/<proj>/<file>.md.
-        link_target = "../" + sr.relpath.as_posix()
+        # Link target: the relative path from the daily file up to the
+        # session file, minus the .md extension — Obsidian resolves
+        # wiki-links by stem. Daily lives at daily/<machine>/<date>.md
+        # (two segments deep), session lives at
+        # sessions/<machine>/<source>/<project>/<file>.md, so we need
+        # two `..` to reach the data-repo root.
+        link_target = "../../" + sr.relpath.as_posix()
         if link_target.endswith(".md"):
             link_target = link_target[:-3]
         sessions_view.append(
@@ -439,6 +453,6 @@ def render_daily_index(
 
     return DailyIndexRender(
         for_date=for_date,
-        relpath=daily_index_relpath(for_date),
+        relpath=daily_index_relpath(for_date, machine=machine),
         markdown=md,
     )

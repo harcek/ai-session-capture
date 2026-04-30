@@ -38,17 +38,23 @@ querying from future agent sessions via MCP.
   AWS / GitHub / OpenAI / Anthropic / Slack / Stripe / JWT / SSH key
   tokens, plus `.env`-style assignments with sensitive key names.
 - **Renders** — one Markdown file per session under
-  `sessions/<source>/<project>/<YYYY-MM-DD>_<HH-MM>_<id>[_<slug>].md`,
-  where `<source>` is `claude` or `codex`. Plus a thin per-day index
-  file under `daily/<YYYY-MM-DD>.md` with Obsidian-style wiki-links
-  to the sessions that touched that day, across all sources.
+  `sessions/<machine>/<source>/<project>/<YYYY-MM-DD>_<HH-MM>_<id>[_<slug>].md`,
+  where `<machine>` is your host (config-supplied or sanitized
+  hostname) and `<source>` is `claude` or `codex`. Plus a per-day
+  index under `daily/<machine>/<YYYY-MM-DD>.md` with Obsidian-style
+  wiki-links to that machine's sessions on that day. Per-machine
+  subtrees never collide on git merge — the foundation for a shared
+  data repo across multiple hosts.
 - **Indexes** — per-session rows in a local SQLite FTS5 table for
   millisecond-latency phrase / AND / OR / prefix search across years
-  of archive. The `source` column lets you scope to a single agent.
+  of archive. `source` and `machine` columns let you scope queries
+  to a single agent or host. `search --rebuild` walks the session
+  MDs on disk, so after a `git pull` another machine's captures are
+  searchable without JSONL on this filesystem.
 - **Serves (optional)** — an MCP server exposes four read-only query
   tools (`search_sessions`, `list_projects`, `list_recent_sessions`,
   `get_session_text`) that Claude Code sessions can call directly,
-  with optional `source` filter.
+  with optional `source` and `machine` filters.
 
 ## Paths (XDG-standard)
 
@@ -82,6 +88,23 @@ The scheduler fires once a day, early morning local time (default
 06:00), and catches up exactly once on wake / boot if the machine was
 asleep at the trigger.
 
+### Upgrading from 0.2.x
+
+The 0.3.0 first-run migrates the data dir in place: legacy
+`sessions/<source>/` and `daily/<date>.md` move under
+`sessions/<this-machine>/<source>/` and `daily/<this-machine>/`.
+Idempotent. No manual steps required if you're on the default
+`output.dir`; for custom dirs the same logic applies to whatever
+path you pointed at.
+
+If you want a stable machine name across hostname changes, set it
+explicitly:
+
+```toml
+[machine]
+name = "mbp"
+```
+
 ### Upgrading from 0.1.x
 
 The 0.2.0 rename moves XDG dirs in place on first run (config / state /
@@ -108,7 +131,8 @@ ai-session-capture --show-redactions daily    # just the redaction count, no bod
 ai-session-capture search "rate limit"
 ai-session-capture search "scanner" --project <your-project> --since 2026-04-01
 ai-session-capture search "redact*" --source codex --limit 5 --format json
-ai-session-capture search --rebuild           # drop and re-index everything
+ai-session-capture search "design" --machine mbp        # filter to one host
+ai-session-capture search --rebuild                     # walk MDs in data dir, reindex
 
 # One-off import from an archive / another machine
 ai-session-capture --projects-root /path/to/other/.claude/projects backfill
@@ -190,8 +214,10 @@ search / mcp_server.
 
 See [`BACKLOG.md`](BACKLOG.md) for the prioritized work list. Next-up
 items: **OpenCode adapter** (third agent, mechanically similar to the
-Codex one) and **source-aware ingestion across machines** (multi-host
-unified archive without losing provenance).
+Codex one) and **private remote + auto-push** (the daily run pushes
+each machine's captures into a shared private repo so you can run
+`search --rebuild` after `git pull` and query the union from any
+host).
 
 ## Development
 

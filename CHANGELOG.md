@@ -3,6 +3,73 @@
 Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 version numbers are semver-ish (0.x while the layout settles).
 
+## [0.3.0] — 2026-04-30
+
+Multi-machine ingestion. Sessions now carry a `machine` discriminator
+alongside `source`, the output layout grows a per-machine segment,
+and the FTS index can be rebuilt by walking session MDs on disk —
+the foundation for "one archive across MBP + Mac mini + Ubuntu, with
+search that sees every machine's captures from any one of them." See
+[`docs/adr/0006-multi-machine-ingestion.md`](docs/adr/0006-multi-machine-ingestion.md)
+for the design.
+
+### Added
+
+- **`[machine]` config section** with optional `name` field. Empty →
+  sanitized `socket.gethostname()` (lowercase, strip trailing
+  `.local`, normalize to `[a-z0-9_-]`). Resolved once at run start
+  via `state.resolve_machine_name(cfg)`.
+- **`Record.machine` field** stamped onto every parsed record by the
+  CLI. Both adapters (Claude Code + Codex) inherit the value.
+- **`machine` column on the FTS index** (`sessions` table +
+  `sessions_fts` virtual table). Composite PK is now
+  `(id, date, source, machine)`. Schema migration runs on first
+  v0.3.0 start; legacy v0.2.0 DBs (PK includes source but not
+  machine) are rebuilt preserving rows.
+- **`--machine` CLI flag** on `daily`, `backfill`, and `search`.
+  Passthrough on `search`; informational no-op on ingest paths
+  (only the local machine's JSONL is on this filesystem) — passing
+  a non-current value logs a warning.
+- **`machine` parameter on all four MCP tools**
+  (`search_sessions`, `list_projects`, `list_recent_sessions`,
+  `get_session_text`). Result rows expose `machine` alongside
+  `source` so the LLM can post-filter or attribute hits.
+- **`search --rebuild` walks the data dir's session MDs** rather
+  than re-running the JSONL pipeline. New helpers
+  `parse_session_md(text)` and `index_row_from_md(path)` parse
+  YAML frontmatter into `SessionIndexRow`. After `git pull` brings
+  in another machine's MDs, `--rebuild` indexes them — no JSONL
+  needed.
+
+### Changed
+
+- **Output layout**: `sessions/<machine>/<source>/<project>/<file>.md`
+  (was `sessions/<source>/<project>/`). Per-machine subtrees never
+  collide on git merge.
+- **Daily index path**: `daily/<machine>/<date>.md` (was
+  `daily/<date>.md`). Cross-machine "what happened on day X" comes
+  via FTS; the daily MD is per-machine.
+- **Daily index wiki-links** now use `../../sessions/<machine>/...`
+  (one extra `../` to escape the per-machine daily subtree).
+- **Session frontmatter** gains `machine: <name>` and a
+  `machine/<name>` tag.
+- **First v0.3.0 run migrates a v0.2.0 archive in place**
+  (`state.migrate_archive_to_per_machine`): legacy
+  `sessions/<source>/` and flat `daily/<date>.md` files move under
+  `sessions/<this-machine>/<source>/` and
+  `daily/<this-machine>/`. Idempotent; custom `output.dir` values
+  receive the same treatment.
+- **Search CLI text output** now reads `<date> · <machine>/<source>
+  · <project> · <id>` (was `<date> · <source> · <project> · <id>`).
+
+### Out of scope for 0.3.0
+
+- **Auto-push to a shared remote** (BACKLOG #C) — the multi-machine
+  semantics are in place but each machine's archive stays local
+  until #C wires git push/pull.
+- **OpenCode adapter** (BACKLOG #A) — same v0.2.0 pattern; lands as
+  v0.4.0.
+
 ## [0.2.0] — 2026-04-30
 
 Multi-source ingestion arrives: alongside the Claude Code adapter,

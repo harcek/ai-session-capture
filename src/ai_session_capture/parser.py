@@ -123,6 +123,11 @@ class Record:
     opencode / …). Defaults to "claude" for backwards-compat across any
     pre-existing FTS rows or callers that don't specify a source.
     See ADR-0005.
+
+    ``machine`` discriminates which physical machine produced the
+    transcript. Empty default; the CLI populates it via
+    ``state.resolve_machine_name`` for every Record before rendering.
+    See ADR-0006.
     """
 
     session_id: str
@@ -139,6 +144,7 @@ class Record:
     thinking: list[str] = field(default_factory=list)
     raw_type: str = ""
     source: str = "claude"
+    machine: str = ""
 
 
 @dataclass

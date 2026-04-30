@@ -93,6 +93,79 @@ def test_get_session_text_handler(db):
     assert found["found"] is True
     assert "rate limit discussion" in found["content"]
 
+
+# --- machine-aware MCP -----------------------------------------------------
+
+
+@pytest.fixture
+def db_multi_machine(tmp_path, monkeypatch):
+    """A fixture with sessions split across two machines so the
+    per-tool ``machine`` filter can be observed."""
+    path = tmp_path / "index.db"
+    monkeypatch.setattr(S, "db_path", lambda: path)
+    rows = [
+        S.SessionIndexRow(
+            id="s_mbp", date="2026-04-20", project="proj", cwd="", first_ts="",
+            turn_count=3, redactions_total=0, content="lemon work",
+            machine="mbp",
+        ),
+        S.SessionIndexRow(
+            id="s_ub", date="2026-04-20", project="proj", cwd="", first_ts="",
+            turn_count=2, redactions_total=0, content="lemon work",
+            machine="ubuntu",
+        ),
+    ]
+    S.upsert_rows(rows, path=path)
+    return path
+
+
+def test_search_sessions_machine_filter(db_multi_machine):
+    """search_sessions narrows by machine; the result row carries the
+    machine field for the LLM to attribute hits."""
+    result = json.loads(
+        M.handle_search_sessions({"query": "lemon", "machine": "mbp"})
+    )
+    assert result["count"] == 1
+    assert result["results"][0]["machine"] == "mbp"
+
+
+def test_list_projects_machine_filter(db_multi_machine):
+    """list_projects partitions by machine when the filter is set."""
+    only_ubuntu = json.loads(M.handle_list_projects({"machine": "ubuntu"}))
+    assert all(p["machine"] == "ubuntu" for p in only_ubuntu)
+
+
+def test_list_recent_sessions_machine_filter(db_multi_machine):
+    """list_recent_sessions narrows by machine."""
+    only_mbp = json.loads(M.handle_list_recent_sessions({"machine": "mbp"}))
+    assert {r["session_id"] for r in only_mbp} == {"s_mbp"}
+
+
+def test_get_session_text_machine_disambiguator(db_multi_machine):
+    """When the same session id collides across machines (theoretical
+    edge case), `machine` resolves which one to return."""
+    rows = [
+        S.SessionIndexRow(
+            id="dup", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="apple from mbp",
+            machine="mbp",
+        ),
+        S.SessionIndexRow(
+            id="dup", date="2026-04-20", project="p", cwd="", first_ts="",
+            turn_count=1, redactions_total=0, content="apple from ubuntu",
+            machine="ubuntu",
+        ),
+    ]
+    S.upsert_rows(rows, path=db_multi_machine)
+    mbp_text = json.loads(
+        M.handle_get_session_text({"session_id": "dup", "machine": "mbp"})
+    )
+    ubuntu_text = json.loads(
+        M.handle_get_session_text({"session_id": "dup", "machine": "ubuntu"})
+    )
+    assert "apple from mbp" in mbp_text["content"]
+    assert "apple from ubuntu" in ubuntu_text["content"]
+
     missing = json.loads(M.handle_get_session_text({"session_id": "nope"}))
     assert missing["found"] is False
 

@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import platform
+import re
 import subprocess
 import tempfile
 from contextlib import contextmanager
@@ -62,6 +63,78 @@ def migrate_data_dir(cfg) -> None:
     legacy = Path(LEGACY).expanduser()
     if not new_path.exists() and legacy.exists():
         legacy.rename(new_path)
+
+
+def migrate_archive_to_per_machine(cfg, machine: str) -> None:
+    """Reshape a v0.2.0 archive into the v0.3.0 per-machine layout.
+
+    v0.2.0 wrote to ``sessions/<source>/<project>/`` and
+    ``daily/<date>.md``. v0.3.0 writes to
+    ``sessions/<machine>/<source>/<project>/`` and
+    ``daily/<machine>/<date>.md``. On first run after upgrade we
+    detect a v0.2.0 shape (``sessions/claude/`` or ``sessions/codex/``
+    sitting at the data dir root, or any ``daily/*.md`` file at the
+    daily dir root) and move it under this machine's segment.
+
+    Idempotent: re-running is a no-op once the shapes are migrated.
+    Custom output dirs receive the same treatment — the migration
+    operates on whatever ``cfg.output.dir`` resolves to.
+    """
+    output = Path(cfg.output.dir).expanduser()
+    if not output.exists():
+        return
+
+    sessions = output / "sessions"
+    if sessions.exists():
+        # Move every legacy <source> dir directly under sessions/ into
+        # sessions/<machine>/<source>/. We treat "all known source
+        # values" as v0.2.0 leftovers — if the user happens to have a
+        # machine named the same as a source, the per-machine target
+        # subtree already exists and the rename is skipped.
+        for legacy_source in ("claude", "codex"):
+            legacy_dir = sessions / legacy_source
+            if not legacy_dir.is_dir():
+                continue
+            machine_dir = sessions / machine
+            machine_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target = machine_dir / legacy_source
+            if target.exists():
+                continue
+            legacy_dir.rename(target)
+
+    daily = output / "daily"
+    if daily.is_dir():
+        # Any *.md sitting flat in daily/ is a v0.2.0 daily index.
+        flat_dailies = [p for p in daily.iterdir() if p.is_file() and p.suffix == ".md"]
+        if flat_dailies:
+            machine_daily = daily / machine
+            machine_daily.mkdir(mode=0o700, parents=True, exist_ok=True)
+            for md in flat_dailies:
+                target = machine_daily / md.name
+                if target.exists():
+                    continue
+                md.rename(target)
+
+
+_MACHINE_NAME_RE = re.compile(r"[^a-z0-9_-]+")
+
+
+def resolve_machine_name(cfg) -> str:
+    """Return a stable machine identity for this run.
+
+    ``cfg.machine.name`` wins if set (after sanitization). Empty
+    falls back to ``socket.gethostname()``. The resolved name is
+    lowercased, has any trailing ``.local`` stripped, and any
+    character outside ``[a-z0-9_-]`` collapsed to ``-``. An entirely
+    blank result becomes ``"unknown"`` so paths are never empty.
+    """
+    import socket
+
+    raw = (cfg.machine.name or socket.gethostname() or "").strip().lower()
+    if raw.endswith(".local"):
+        raw = raw[: -len(".local")]
+    cleaned = _MACHINE_NAME_RE.sub("-", raw).strip("-")
+    return cleaned or "unknown"
 
 
 def _cursor_path(root: Path | None = None) -> Path:

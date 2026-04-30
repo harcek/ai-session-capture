@@ -64,6 +64,7 @@ class SessionNaming:
     custom_title: str | None
     first_prompt: str | None
     source: str = "claude"
+    machine: str = ""
 
 
 def session_filename(naming: SessionNaming, cfg: Config, tz: ZoneInfo) -> str:
@@ -104,20 +105,31 @@ def session_filename(naming: SessionNaming, cfg: Config, tz: ZoneInfo) -> str:
 def session_relpath(naming: SessionNaming, cfg: Config, tz: ZoneInfo) -> PurePosixPath:
     """Full relative path under the output dir for a session file.
 
-    Layout: ``sessions/<source>/<project>/<file>.md`` (with the
-    ``<project>/`` segment elided when ``per_project_dirs = false``).
-    The ``<source>/`` segment lets per-source archives be wiped or
-    rebuilt independently — see ADR-0005.
+    Layout: ``sessions/<machine>/<source>/<project>/<file>.md`` (with
+    the ``<project>/`` segment elided when ``per_project_dirs =
+    false``). The ``<machine>/`` segment scopes each host's
+    contribution into its own subtree so multi-machine pushes never
+    collide on git merge — see ADR-0006. The ``<source>/`` segment
+    lets per-source archives be wiped or rebuilt independently — see
+    ADR-0005.
     """
     project = sanitize_project(naming.project_raw, cfg)
     source = naming.source or "claude"
+    machine = naming.machine or "unknown"
     fname = session_filename(naming, cfg, tz)
-    base = PurePosixPath("sessions") / source
+    base = PurePosixPath("sessions") / machine / source
     if cfg.session_files.per_project_dirs:
         return base / project / fname
     return base / fname
 
 
-def daily_index_relpath(d: date) -> PurePosixPath:
-    """``daily/YYYY-MM-DD.md`` — flat, no per-project subdirs."""
-    return PurePosixPath("daily") / f"{d.isoformat()}.md"
+def daily_index_relpath(d: date, machine: str = "") -> PurePosixPath:
+    """``daily/<machine>/YYYY-MM-DD.md`` — per-machine subtree.
+
+    Per-machine paths avoid the git-merge conflict that flat
+    ``daily/<date>.md`` would create when two machines render the
+    same date (ADR-0006). ``machine`` defaults to ``"unknown"`` so a
+    caller without context still produces a valid path.
+    """
+    machine_seg = machine or "unknown"
+    return PurePosixPath("daily") / machine_seg / f"{d.isoformat()}.md"

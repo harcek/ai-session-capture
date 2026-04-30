@@ -11,13 +11,19 @@ propagates them.
 ## Project in one paragraph
 
 `ai-session-capture` is a redaction-first, local-first archive for
-AI coding-agent sessions. As of v0.2.0 it ships **two adapters in
+AI coding-agent sessions. As of v0.3.0 it ships **two adapters in
 one package** (`src/ai_session_capture/`): a Claude Code adapter
 (`parser.py`) and a Codex adapter (`codex_parser.py`). OpenCode
 will follow as a third sibling parser (see [`BACKLOG.md`](BACKLOG.md)).
 The core pipeline — parse, structurally drop sensitive tool output,
 regex-redact, render Markdown, index in FTS5, serve via MCP — is
 shared; adapters contribute only their source-specific parsers.
+Sessions are partitioned by `(machine, source)` in both the file
+layout (`sessions/<machine>/<source>/<project>/...`) and the FTS
+index, so a single shared data repo can hold multiple machines'
+captures without merge collisions. See ADRs
+[0005](docs/adr/0005-multi-source-codex-adapter.md) and
+[0006](docs/adr/0006-multi-machine-ingestion.md).
 
 ## Non-negotiable principles
 

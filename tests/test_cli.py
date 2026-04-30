@@ -62,21 +62,31 @@ def _find_session_file(base: Path) -> Path | None:
     return None
 
 
+def _find_daily_file(base: Path) -> Path | None:
+    """Locate the single daily MD inside daily/<machine>/ for tests."""
+    daily_root = base / "daily"
+    if not daily_root.exists():
+        return None
+    for md in daily_root.rglob("*.md"):
+        return md
+    return None
+
+
 def test_backfill_writes_session_and_index(cli_env, fake_projects_root):
     _seed_session(fake_projects_root, "2026-04-20")
     rc = main(["--config", "/nonexistent.toml", "backfill"])
     assert rc == 0
     base = cli_env / ".local" / "share" / "ai-sessions"
-    # Session file exists under sessions/<project>/
+    # Session file exists under sessions/<machine>/<source>/<project>/
     sess_file = _find_session_file(base)
     assert sess_file is not None
     text = sess_file.read_text()
     assert "hello claude" in text
     assert "hello human" in text
-    # Daily index exists and wiki-links to the session
-    daily = base / "daily" / "2026-04-20.md"
-    assert daily.exists()
-    assert "[[../sessions/" in daily.read_text()
+    # Daily index exists at daily/<machine>/ and wiki-links to the session
+    daily = _find_daily_file(base)
+    assert daily is not None and daily.name == "2026-04-20.md"
+    assert "[[../../sessions/" in daily.read_text()
 
 
 def test_backfill_is_idempotent(cli_env, fake_projects_root):
@@ -84,7 +94,7 @@ def test_backfill_is_idempotent(cli_env, fake_projects_root):
     main(["--config", "/nonexistent.toml", "backfill"])
     base = cli_env / ".local" / "share" / "ai-sessions"
     sess_file = _find_session_file(base)
-    daily = base / "daily" / "2026-04-20.md"
+    daily = _find_daily_file(base)
     m1_sess = sess_file.stat().st_mtime
     m1_idx = daily.stat().st_mtime
     main(["--config", "/nonexistent.toml", "backfill"])
@@ -107,7 +117,7 @@ def test_output_files_are_0600(cli_env, fake_projects_root):
     base = cli_env / ".local" / "share" / "ai-sessions"
     sess_file = _find_session_file(base)
     assert (sess_file.stat().st_mode & 0o777) == 0o600
-    daily = base / "daily" / "2026-04-20.md"
+    daily = _find_daily_file(base)
     assert (daily.stat().st_mode & 0o777) == 0o600
 
 
@@ -149,9 +159,8 @@ def test_granularity_session_mode_skips_daily_index(
     assert rc == 0
     base = cli_env / ".local" / "share" / "ai-sessions"
     assert _find_session_file(base) is not None
-    # daily/ dir should not contain the index because mode=session skipped it
-    daily = base / "daily" / "2026-04-20.md"
-    assert not daily.exists()
+    # daily/ dir should not contain any index because mode=session skipped it
+    assert _find_daily_file(base) is None
 
 
 def test_granularity_daily_mode_falls_back_to_session_and_daily(
@@ -168,7 +177,7 @@ def test_granularity_daily_mode_falls_back_to_session_and_daily(
     # logger; it's manually verifiable and guaranteed by the code path
     # unit-tested in the next test.
     base = cli_env / ".local" / "share" / "ai-sessions"
-    assert (base / "daily" / "2026-04-20.md").exists()
+    assert _find_daily_file(base) is not None
 
 
 def test_granularity_daily_mode_warning_string_present():
@@ -193,13 +202,14 @@ def test_daily_command_uses_specified_date(cli_env, fake_projects_root):
     )
     assert rc == 0
     base = cli_env / ".local" / "share" / "ai-sessions"
-    assert (base / "daily" / "2026-04-20.md").exists()
+    daily = _find_daily_file(base)
+    assert daily is not None and daily.name == "2026-04-20.md"
     assert _find_session_file(base) is not None
 
 
 def test_backfill_with_codex_source_only(cli_env, fake_projects_root, tmp_path, monkeypatch):
     """--source codex skips Claude transcripts even when Claude data exists.
-    Codex sessions land under sessions/codex/<project>/."""
+    Codex sessions land under sessions/<machine>/codex/<project>/."""
     # Seed a Claude session
     _seed_session(fake_projects_root, "2026-04-20")
 
@@ -240,10 +250,10 @@ def test_backfill_with_codex_source_only(cli_env, fake_projects_root, tmp_path, 
     assert rc == 0
 
     base = cli_env / ".local" / "share" / "ai-sessions"
-    # Codex session present under sessions/codex/<project>/
-    assert any(base.rglob("sessions/codex/proj/*.md"))
-    # No Claude session was processed (--source codex)
-    assert not any(base.rglob("sessions/claude/*"))
+    # Codex session present under sessions/<machine>/codex/<project>/
+    assert any(base.rglob("sessions/*/codex/proj/*.md"))
+    # No Claude subtree exists under any machine (--source codex)
+    assert not any(base.rglob("sessions/*/claude"))
 
 
 def test_daily_reindexes_all_dates_for_cross_day_sessions(
@@ -330,6 +340,45 @@ def test_projects_root_cli_flag_overrides_env(
     files = list(base.rglob("*.md"))
     # At least one session file with content from the flag path
     assert any("alt-root session" in p.read_text() for p in files if "sessions/" in str(p))
+
+
+def test_search_machine_filter_warns_on_ingest(cli_env, fake_projects_root):
+    """--machine on daily/backfill is a no-op; the CLI logs a warning
+    so a user who expected per-machine ingest catches the mistake.
+    The csc logger has propagate=False (so warnings don't leak to
+    pytest's root handler); we attach a list-handler directly."""
+    import logging
+    captured: list[logging.LogRecord] = []
+
+    class _ListHandler(logging.Handler):
+        def emit(self, record):
+            captured.append(record)
+
+    h = _ListHandler(level=logging.WARNING)
+    logging.getLogger("csc").addHandler(h)
+    try:
+        _seed_session(fake_projects_root, "2026-04-20")
+        rc = main(["--config", "/nonexistent.toml", "backfill",
+                   "--machine", "some-other-host"])
+    finally:
+        logging.getLogger("csc").removeHandler(h)
+    assert rc == 0
+    assert any("ignoring --machine" in rec.getMessage() for rec in captured)
+
+
+def test_load_all_records_stamps_machine(cli_env, fake_projects_root, monkeypatch):
+    """Records arrive from parse_file with empty machine; the CLI
+    helper stamps the resolved machine on every one. Without this,
+    the FTS index can't partition by host (ADR-0006)."""
+    from argparse import Namespace
+    import logging
+    from ai_session_capture.cli import _load_all_records
+
+    _seed_session(fake_projects_root, "2026-04-20")
+    args = Namespace(projects_root=None)
+    records = _load_all_records(logging.getLogger("test"), args, ("claude",), "test-host")
+    assert records, "expected at least one record"
+    assert all(r.machine == "test-host" for r in records)
 
 
 def test_last_error_cleared_on_success(cli_env, fake_projects_root):

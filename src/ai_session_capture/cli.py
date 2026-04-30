@@ -40,8 +40,10 @@ from .render import (
 from .state import (
     clear_last_error,
     flock_exclusive,
+    migrate_archive_to_per_machine,
     migrate_data_dir,
     notify_failure,
+    resolve_machine_name,
     setup_logging,
     state_dir,
     write_at,
@@ -79,14 +81,32 @@ def _resolve_sources(args) -> tuple[str, ...]:
     return (raw,)
 
 
+def _warn_machine_flag_on_ingest(args, current: str, logger: logging.Logger) -> None:
+    """``--machine`` on daily/backfill is informational; only this
+    machine's JSONL is on this filesystem. Non-current values are a
+    likely scripting mistake — warn so the user notices, but proceed.
+    """
+    requested = getattr(args, "machine", None)
+    if requested and requested != current:
+        logger.warning(
+            "ignoring --machine=%s on ingest path; this run captures the "
+            "local machine (%s) only. Use `search --machine=%s` to query "
+            "another machine's archive.",
+            requested, current, requested,
+        )
+
+
 def _load_all_records(
-    logger: logging.Logger, args, sources: tuple[str, ...]
+    logger: logging.Logger, args, sources: tuple[str, ...], machine: str
 ) -> list:
     """Parse every JSONL across the requested sources; skip individual failures.
 
     Adapters with a missing root directory contribute zero records
     (``iter_*_jsonls`` returns empty), so on a machine without Codex
     installed, ``--source all`` quietly captures only Claude.
+
+    ``machine`` is stamped onto every Record so the renderer and FTS
+    index can partition by host (ADR-0006).
     """
     records: list = []
 
@@ -106,6 +126,8 @@ def _load_all_records(
             except Exception as e:  # noqa: BLE001
                 logger.warning("skipped %s: %s", jsonl, e)
 
+    for r in records:
+        r.machine = machine
     return records
 
 
@@ -158,8 +180,10 @@ def cmd_daily(args, cfg: Config, logger: logging.Logger) -> int:
     tz = resolve_tz(cfg)
     target = args.date or (datetime.now(tz).date() - timedelta(days=1))
     sources = _resolve_sources(args)
+    machine = resolve_machine_name(cfg)
+    _warn_machine_flag_on_ingest(args, machine, logger)
 
-    records = _load_all_records(logger, args, sources)
+    records = _load_all_records(logger, args, sources, machine)
     meta = _load_all_meta(logger, args, sources)
 
     # Identify session IDs that had any turn on the target local-date.
@@ -179,7 +203,7 @@ def cmd_daily(args, cfg: Config, logger: logging.Logger) -> int:
         r for r in records
         if r.timestamp and r.timestamp.astimezone(tz).date() == target
     ]
-    index = render_daily_index(target, renders, cfg, tz, all_records=day_records)
+    index = render_daily_index(target, renders, cfg, tz, all_records=day_records, machine=machine)
 
     if args.dry_run:
         sys.stdout.write(f"# daily index ({index.relpath})\n\n{index.markdown}\n")
@@ -242,7 +266,9 @@ def cmd_daily(args, cfg: Config, logger: logging.Logger) -> int:
 def cmd_backfill(args, cfg: Config, logger: logging.Logger) -> int:
     tz = resolve_tz(cfg)
     sources = _resolve_sources(args)
-    records = _load_all_records(logger, args, sources)
+    machine = resolve_machine_name(cfg)
+    _warn_machine_flag_on_ingest(args, machine, logger)
+    records = _load_all_records(logger, args, sources, machine)
     meta = _load_all_meta(logger, args, sources)
     if not records:
         logger.warning("no records found for sources=%s", ",".join(sources))
@@ -295,7 +321,7 @@ def cmd_backfill(args, cfg: Config, logger: logging.Logger) -> int:
                 for r in records
                 if r.timestamp and r.timestamp.astimezone(tz).date() == d
             ]
-            index = render_daily_index(d, renders, cfg, tz, all_records=day_records)
+            index = render_daily_index(d, renders, cfg, tz, all_records=day_records, machine=machine)
             if args.dry_run:
                 logger.info("dry-run daily %s: %d chars", d, len(index.markdown))
                 continue
@@ -329,15 +355,18 @@ def cmd_backfill(args, cfg: Config, logger: logging.Logger) -> int:
 
 
 def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
-    tz = resolve_tz(cfg)
-
     if args.rebuild:
-        sources = _resolve_sources(args)
-        records = _load_all_records(logger, args, sources)
-        n = search_mod.rebuild_all(records, cfg, tz)
+        # Walk the rendered session MDs in the data dir — this is the
+        # path that lets one machine query the unified archive after a
+        # ``git pull`` brought in MDs from other machines (ADR-0006).
+        # The legacy parse-from-JSONL rebuild lived in this slot until
+        # v0.3.0; see ``search_mod.rebuild_all`` for the by-records
+        # variant if it's needed again later.
+        output_dir = Path(cfg.output.dir).expanduser()
+        n, skipped = search_mod.rebuild_all_from_disk(output_dir)
         logger.info(
-            "rebuilt index from scratch: %d sessions across sources=%s",
-            n, ",".join(sources),
+            "rebuilt index from %s: %d sessions indexed, %d skipped (bad frontmatter)",
+            output_dir, n, skipped,
         )
         return 0
 
@@ -356,6 +385,7 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
             args.query,
             project=args.project,
             source=source_filter,
+            machine=getattr(args, "machine", None) or None,
             since=args.since,
             until=args.until,
             limit=args.limit,
@@ -376,6 +406,7 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
                 "session_id": r.session_id,
                 "date": r.date,
                 "source": r.source,
+                "machine": r.machine,
                 "project": r.project,
                 "cwd": r.cwd,
                 "first_ts": r.first_ts,
@@ -393,8 +424,8 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
         return 0
     for r in results:
         sys.stdout.write(
-            f"{r.date} · {r.source} · {r.project or '—'} · {r.session_id[:8]} "
-            f"({r.turn_count} turns"
+            f"{r.date} · {r.machine}/{r.source} · {r.project or '—'} · "
+            f"{r.session_id[:8]} ({r.turn_count} turns"
             + (f", {r.redactions_total} redactions" if r.redactions_total else "")
             + ")\n"
         )
@@ -446,6 +477,10 @@ def build_parser() -> argparse.ArgumentParser:
     source_choices = (*KNOWN_SOURCES, SOURCE_ALL)
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    # ``--machine`` is a query-time filter on `search`; on `daily` /
+    # `backfill` only this machine's JSONL is on this filesystem, so
+    # passing a non-current value warns and is otherwise a no-op
+    # (kept as a flag for symmetry + scriptability).
     daily_p = sub.add_parser(
         "daily", help="render yesterday's MD (what the scheduler runs)"
     )
@@ -453,11 +488,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--source", choices=source_choices, default=SOURCE_ALL,
         help="which adapter source to ingest (default: all)",
     )
+    daily_p.add_argument(
+        "--machine",
+        help="ignored on ingest paths (only the local machine's JSONL is "
+             "on this filesystem); see `search --machine` for query-time use",
+    )
 
     backfill_p = sub.add_parser("backfill", help="render every historical date")
     backfill_p.add_argument(
         "--source", choices=source_choices, default=SOURCE_ALL,
         help="which adapter source to ingest (default: all)",
+    )
+    backfill_p.add_argument(
+        "--machine",
+        help="ignored on ingest paths; see `search --machine` for query-time use",
     )
 
     sp = sub.add_parser("search", help="query the FTS index over captured sessions")
@@ -467,6 +511,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--source", choices=source_choices, default=SOURCE_ALL,
         help="filter results by adapter source (default: all)",
     )
+    sp.add_argument(
+        "--machine",
+        help="filter results by machine (e.g. `mbp`, `ubuntu`); default: all",
+    )
     sp.add_argument("--since", type=_parse_date, help="YYYY-MM-DD, inclusive")
     sp.add_argument("--until", type=_parse_date, help="YYYY-MM-DD, inclusive")
     sp.add_argument("--limit", type=int, default=20)
@@ -474,7 +522,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--rebuild",
         action="store_true",
-        help="drop and re-index from scratch (no QUERY needed)",
+        help="drop and re-index from scratch by walking session MDs in the "
+             "data dir (no QUERY needed)",
     )
 
     sub.add_parser(
@@ -500,6 +549,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     migrate_data_dir(cfg)
+    migrate_archive_to_per_machine(cfg, resolve_machine_name(cfg))
 
     # Apply configured log level if --verbose isn't forcing debug
     if not args.verbose:

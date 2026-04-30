@@ -157,11 +157,12 @@ def test_session_relpath_per_project_dirs():
         first_ts=datetime(2026, 4, 20, 13, 21, tzinfo=UTC),
         custom_title="testing",
         first_prompt=None,
+        machine="mbp",
     )
     rel = session_relpath(naming, cfg, UTC)
-    # Layout: sessions/<source>/<project>/<file>.md (ADR-0005)
+    # Layout: sessions/<machine>/<source>/<project>/<file>.md (ADR-0006).
     assert str(rel) == (
-        "sessions/claude/deep-value-scanner/"
+        "sessions/mbp/claude/deep-value-scanner/"
         "2026-04-20_13-21_60651cdb_testing.md"
     )
 
@@ -175,9 +176,10 @@ def test_session_relpath_flat_when_disabled():
         first_ts=datetime(2026, 4, 20, 13, 21, tzinfo=UTC),
         custom_title="note",
         first_prompt=None,
+        machine="mbp",
     )
     rel = session_relpath(naming, cfg, UTC)
-    assert str(rel) == "sessions/claude/2026-04-20_13-21_60651cdb_note.md"
+    assert str(rel) == "sessions/mbp/claude/2026-04-20_13-21_60651cdb_note.md"
 
 
 def test_session_relpath_uses_source_segment():
@@ -189,10 +191,33 @@ def test_session_relpath_uses_source_segment():
         custom_title=None,
         first_prompt=None,
         source="codex",
+        machine="ubuntu",
     )
     rel = session_relpath(naming, cfg, UTC)
-    assert str(rel).startswith("sessions/codex/some-project/")
+    assert str(rel).startswith("sessions/ubuntu/codex/some-project/")
+
+
+def test_session_relpath_unknown_machine_default():
+    """A SessionNaming without an explicit machine still produces a
+    valid path (machine segment = `unknown`). Guards against empty
+    path components landing in the filesystem layout."""
+    cfg = Config()
+    naming = SessionNaming(
+        session_id="abcdef12",
+        project_raw="p",
+        first_ts=datetime(2026, 4, 20, 10, 0, tzinfo=UTC),
+        custom_title=None,
+        first_prompt=None,
+    )
+    rel = session_relpath(naming, cfg, UTC)
+    assert str(rel).startswith("sessions/unknown/claude/p/")
 
 
 def test_daily_index_relpath():
-    assert str(daily_index_relpath(date(2026, 4, 20))) == "daily/2026-04-20.md"
+    assert str(daily_index_relpath(date(2026, 4, 20), "mbp")) == "daily/mbp/2026-04-20.md"
+
+
+def test_daily_index_relpath_unknown_machine_default():
+    """Empty machine collapses to 'unknown' rather than producing an
+    empty path component."""
+    assert str(daily_index_relpath(date(2026, 4, 20))) == "daily/unknown/2026-04-20.md"
