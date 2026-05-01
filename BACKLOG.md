@@ -79,6 +79,54 @@ without console).
 - Symlink / TOCTOU audit pass on `state.py` writes.
 - Pre-push hook on the data repo once the remote is wired.
 
+### Large-session ergonomics — Obsidian indexing + agent slicing
+
+Real session MDs grow huge when a session spans weeks (3000+ turns,
+multi-megabyte single files). Two consumer-side surfaces hit this:
+
+1. **Obsidian** struggles to index the vault. Search, graph view,
+   and link rendering get sluggish or stall on the big MDs.
+2. **LLM-driven processing** (e.g. weekly digests, see ◇◇ Maybe)
+   blows the token budget if it loads whole session files.
+
+Options to evaluate when this becomes blocking:
+
+- **Tell Obsidian not to index `sessions/`**, only the daily index
+  files. Obsidian has `Settings → Files & Links → Excluded files`
+  for folder-level exclusion; clicking a wiki-link still opens the
+  underlying session MD on demand without pre-indexing. Lowest-cost
+  workaround — pure config, no code change.
+- **Daily-only consumption surface**. Configure Obsidian (or the
+  user's reading habit) to enter via daily indexes and drill in.
+  Pairs naturally with the exclusion above.
+- **Per-day session shards**. Architectural shift: render a session
+  as multiple MDs split by date instead of one file pinned to start
+  date. ADR-0003 chose the single-file shape deliberately; revisit
+  only if the workarounds above prove insufficient.
+- **Highlights/summary alongside full MD**. Renderer also emits a
+  short "highlights" file per session next to the full one;
+  Obsidian and LLM agents read the short version, drill in only
+  on demand. Adds rendering complexity.
+
+For LLM agent processing specifically (the digest case), the
+straightforward tactic — applicable today without any code change —
+is **slice by timestamp blocks before sending to the LLM**:
+
+- Each session MD body uses `### [YYYY-MM-DD HH:MM:SS] {Q,A}`
+  headers consistently.
+- For a per-day digest of a session, grep the file for blocks
+  whose timestamp prefix matches the target date — typically
+  10–200 lines per day even on a multi-week session.
+- Send only the slice to the LLM. Token cost stays bounded.
+
+That tactic is also the design hint for the **Weekly LLM digest**
+item (◇◇ Maybe) when it lands — the digest doesn't need full
+session loads, just per-date slices.
+
+- Surfaced by: an external agent attempting to build a digest and
+  hitting both the Obsidian indexing wall and the token-budget
+  wall in the same session (2026-05-01).
+
 ---
 
 ## ◇◇ Maybe
@@ -88,6 +136,12 @@ without console).
 Monday 07:00 cron: summarize last week's sessions into
 `weekly/YYYY-WW.md`. Standup material. Revisit once there's ≥4 weeks
 of data to meaningfully summarize.
+
+Implementation hint when this lands: don't load full session MDs
+into the LLM context — slice by `### [YYYY-MM-DD HH:MM:SS]` block
+prefix and send only the per-date slices. Keeps token cost bounded
+even for multi-week sessions. See "Large-session ergonomics"
+in `◇ Backlog` for the full rationale.
 
 ### Phase 3 possibilities
 
