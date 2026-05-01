@@ -46,7 +46,7 @@ writes only under its own subtree.
             │                 (skip write if unchanged), atomic
             │                 tmp+rename, 0o600 mode, flock-guarded
             ▼
- ~/.local/share/ai-sessions/sessions/<machine>/<source>/<project>/<file>.md
+ ~/.local/share/ai-session-capture/sessions/<machine>/<source>/<project>/<file>.md
                                        (output, private git repo)
 ```
 
@@ -117,7 +117,7 @@ All paths are XDG-standard and identical across platforms:
 
 - Config: `~/.config/ai-session-capture/`
 - State: `~/.local/state/ai-session-capture/` (cursor, lock, run.log, last-error, index.db)
-- Output (data repo): `~/.local/share/ai-sessions/`
+- Output (data repo): `~/.local/share/ai-session-capture/`
 
 These rename from `claude-session-capture` / `claude-sessions` in
 v0.2.0; first run after upgrade migrates the existing dirs in place

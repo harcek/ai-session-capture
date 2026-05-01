@@ -51,7 +51,7 @@ max_message_chars = 8000
 
 [output]
 # Daily MDs land here. This is the data-repo path.
-dir = "~/.local/share/ai-sessions"
+dir = "~/.local/share/ai-session-capture"
 
 [output.frontmatter]
 # YAML frontmatter atop each session + daily file (date, session count,

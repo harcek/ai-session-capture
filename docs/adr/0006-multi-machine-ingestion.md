@@ -59,7 +59,7 @@ Per-machine subtrees, with the existing source/project structure
 nested inside.
 
 ```
-~/.local/share/ai-sessions/
+~/.local/share/ai-session-capture/
 ├── sessions/
 │   ├── mbp/
 │   │   ├── claude/<project>/<file>.md

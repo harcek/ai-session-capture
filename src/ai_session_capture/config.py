@@ -66,7 +66,7 @@ class FrontmatterConfig:
 
 @dataclass
 class OutputConfig:
-    dir: str = "~/.local/share/ai-sessions"
+    dir: str = "~/.local/share/ai-session-capture"
     frontmatter: FrontmatterConfig = field(default_factory=FrontmatterConfig)
 
 

@@ -59,6 +59,15 @@ for the design.
   `sessions/<this-machine>/<source>/` and
   `daily/<this-machine>/`. Idempotent; custom `output.dir` values
   receive the same treatment.
+- **Default data dir renamed for symmetry**: was
+  `~/.local/share/ai-sessions/`, now
+  `~/.local/share/ai-session-capture/` so the data dir lines up
+  with `~/.config/ai-session-capture/` and
+  `~/.local/state/ai-session-capture/`. The `migrate_data_dir`
+  shim chains through legacy → new in one rename: a v0.1.x or
+  v0.2.0 user with `claude-sessions` / `ai-sessions` lands
+  directly at `ai-session-capture` on first v0.3.x start. Custom
+  `output.dir` values are left alone.
 - **Search CLI text output** now reads `<date> · <machine>/<source>
   · <project> · <id>` (was `<date> · <source> · <project> · <id>`).
 

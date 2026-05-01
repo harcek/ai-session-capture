@@ -38,5 +38,5 @@ Linux)
 esac
 
 echo
-echo "note: logs, state, and the ~/.local/share/ai-sessions data repo"
+echo "note: logs, state, and the ~/.local/share/ai-session-capture data repo"
 echo "were not touched. Remove them manually if you want a full clean."

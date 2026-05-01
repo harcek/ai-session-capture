@@ -258,3 +258,84 @@ def test_migrate_archive_no_output_dir(tmp_path):
     cfg = Config()
     cfg.output.dir = str(tmp_path / "does-not-exist")
     st.migrate_archive_to_per_machine(cfg, "mbp")  # must not raise
+
+
+# --- migrate_data_dir (data-dir default rename chain) ---------------------
+
+
+def test_migrate_data_dir_v02_to_current(tmp_path, monkeypatch):
+    """A v0.2.0 user with `~/.local/share/ai-sessions/` is moved to
+    `~/.local/share/ai-session-capture/` on first v0.3.x run."""
+    from ai_session_capture.config import Config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy = tmp_path / ".local" / "share" / "ai-sessions"
+    legacy.mkdir(parents=True)
+    (legacy / "marker").write_text("v0.2 archive")
+
+    cfg = Config()  # default output.dir = ~/.local/share/ai-session-capture
+    st.migrate_data_dir(cfg)
+
+    new = tmp_path / ".local" / "share" / "ai-session-capture"
+    assert new.exists()
+    assert (new / "marker").read_text() == "v0.2 archive"
+    assert not legacy.exists()
+
+
+def test_migrate_data_dir_v01_skips_to_current(tmp_path, monkeypatch):
+    """A pre-v0.2.0 user with `~/.local/share/claude-sessions/` is
+    moved straight to `ai-session-capture` (single rename, no
+    intermediate `ai-sessions` stop)."""
+    from ai_session_capture.config import Config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy = tmp_path / ".local" / "share" / "claude-sessions"
+    legacy.mkdir(parents=True)
+    (legacy / "marker").write_text("v0.1 archive")
+
+    cfg = Config()
+    st.migrate_data_dir(cfg)
+
+    new = tmp_path / ".local" / "share" / "ai-session-capture"
+    assert new.exists()
+    assert (new / "marker").read_text() == "v0.1 archive"
+    assert not legacy.exists()
+
+
+def test_migrate_data_dir_skips_when_target_exists(tmp_path, monkeypatch):
+    """If both legacy and new dirs exist, the new dir wins — never
+    clobber an in-place archive."""
+    from ai_session_capture.config import Config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy = tmp_path / ".local" / "share" / "ai-sessions"
+    new = tmp_path / ".local" / "share" / "ai-session-capture"
+    legacy.mkdir(parents=True)
+    new.mkdir(parents=True)
+    (legacy / "old-marker").write_text("legacy")
+    (new / "new-marker").write_text("current")
+
+    cfg = Config()
+    st.migrate_data_dir(cfg)
+
+    assert (new / "new-marker").exists()
+    assert (legacy / "old-marker").exists()  # legacy left alone
+
+
+def test_migrate_data_dir_skips_custom_output_dir(tmp_path, monkeypatch):
+    """A user who set a non-default `output.dir` is fully opted out
+    of the shim — their custom path is none of the migration's
+    business."""
+    from ai_session_capture.config import Config
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy = tmp_path / ".local" / "share" / "ai-sessions"
+    legacy.mkdir(parents=True)
+    (legacy / "marker").write_text("v0.2")
+
+    cfg = Config()
+    cfg.output.dir = str(tmp_path / "custom" / "place")
+    st.migrate_data_dir(cfg)
+
+    # legacy untouched; custom path not auto-created
+    assert (legacy / "marker").exists()

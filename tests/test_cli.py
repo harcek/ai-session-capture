@@ -76,7 +76,7 @@ def test_backfill_writes_session_and_index(cli_env, fake_projects_root):
     _seed_session(fake_projects_root, "2026-04-20")
     rc = main(["--config", "/nonexistent.toml", "backfill"])
     assert rc == 0
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     # Session file exists under sessions/<machine>/<source>/<project>/
     sess_file = _find_session_file(base)
     assert sess_file is not None
@@ -92,7 +92,7 @@ def test_backfill_writes_session_and_index(cli_env, fake_projects_root):
 def test_backfill_is_idempotent(cli_env, fake_projects_root):
     _seed_session(fake_projects_root, "2026-04-20")
     main(["--config", "/nonexistent.toml", "backfill"])
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     sess_file = _find_session_file(base)
     daily = _find_daily_file(base)
     m1_sess = sess_file.stat().st_mtime
@@ -106,7 +106,7 @@ def test_dry_run_does_not_write(cli_env, fake_projects_root):
     _seed_session(fake_projects_root, "2026-04-20")
     rc = main(["--config", "/nonexistent.toml", "--dry-run", "backfill"])
     assert rc == 0
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     if base.exists():
         assert not any(base.rglob("*.md"))
 
@@ -114,7 +114,7 @@ def test_dry_run_does_not_write(cli_env, fake_projects_root):
 def test_output_files_are_0600(cli_env, fake_projects_root):
     _seed_session(fake_projects_root, "2026-04-20")
     main(["--config", "/nonexistent.toml", "backfill"])
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     sess_file = _find_session_file(base)
     assert (sess_file.stat().st_mode & 0o777) == 0o600
     daily = _find_daily_file(base)
@@ -141,7 +141,7 @@ def test_redacted_content_lands_in_session_file_with_warning(cli_env, fake_proje
     )
     rc = main(["--config", "/nonexistent.toml", "backfill"])
     assert rc == 0
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     sess_file = _find_session_file(base)
     text = sess_file.read_text()
     assert "AKIAIOSFODNN7EXAMPLE" not in text
@@ -157,7 +157,7 @@ def test_granularity_session_mode_skips_daily_index(
     cfg_file.write_text('[granularity]\nmode = "session"\n')
     rc = main(["--config", str(cfg_file), "backfill"])
     assert rc == 0
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     assert _find_session_file(base) is not None
     # daily/ dir should not contain any index because mode=session skipped it
     assert _find_daily_file(base) is None
@@ -176,7 +176,7 @@ def test_granularity_daily_mode_falls_back_to_session_and_daily(
     # deprecation warning goes to the rotating run.log via the csc
     # logger; it's manually verifiable and guaranteed by the code path
     # unit-tested in the next test.
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     assert _find_daily_file(base) is not None
 
 
@@ -201,7 +201,7 @@ def test_daily_command_uses_specified_date(cli_env, fake_projects_root):
         ]
     )
     assert rc == 0
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     daily = _find_daily_file(base)
     assert daily is not None and daily.name == "2026-04-20.md"
     assert _find_session_file(base) is not None
@@ -249,7 +249,7 @@ def test_backfill_with_codex_source_only(cli_env, fake_projects_root, tmp_path, 
     rc = main(["--config", "/nonexistent.toml", "backfill", "--source", "codex"])
     assert rc == 0
 
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     # Codex session present under sessions/<machine>/codex/<project>/
     assert any(base.rglob("sessions/*/codex/proj/*.md"))
     # No Claude subtree exists under any machine (--source codex)
@@ -335,7 +335,7 @@ def test_projects_root_cli_flag_overrides_env(
     rc = main(["--projects-root", str(alt_root), "backfill"])
     assert rc == 0
     # Session from the flag path should be captured
-    base = cli_env / ".local" / "share" / "ai-sessions"
+    base = cli_env / ".local" / "share" / "ai-session-capture"
     assert base.exists()
     files = list(base.rglob("*.md"))
     # At least one session file with content from the flag path

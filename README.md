@@ -62,7 +62,7 @@ querying from future agent sessions via MCP.
 |---|---|
 | Config | `~/.config/ai-session-capture/config.toml` |
 | State (cursor, lockfile, run log, FTS DB) | `~/.local/state/ai-session-capture/` |
-| Output archive (your data, a git repo) | `~/.local/share/ai-sessions/` |
+| Output archive (your data, a git repo) | `~/.local/share/ai-session-capture/` |
 | Input (read-only) — Claude | `~/.claude/projects/` (or `$CLAUDE_CONFIG_DIR/projects`) |
 | Input (read-only) — Codex | `~/.codex/sessions/` (or `$CODEX_SESSIONS_ROOT`) |
 

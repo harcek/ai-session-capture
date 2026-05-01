@@ -47,22 +47,37 @@ def state_dir() -> Path:
 
 
 def migrate_data_dir(cfg) -> None:
-    """Rename the legacy data dir on default-config installs.
+    """Rename a legacy data dir on default-config installs.
 
-    Pre-v0.2.0 the default output dir was
-    ``~/.local/share/claude-sessions``. If the user is still on the
-    default config (now ``~/.local/share/ai-sessions``) and only the
-    legacy dir exists, move it so the existing archive is preserved.
-    Custom output dirs are left untouched — they're the user's call.
+    The default output dir has changed twice:
+
+    - Pre-v0.2.0 used ``~/.local/share/claude-sessions``.
+    - v0.2.0 / v0.3.0 used ``~/.local/share/ai-sessions``.
+    - v0.3.x+ uses ``~/.local/share/ai-session-capture`` (matches
+      the XDG config + state dirs for symmetry).
+
+    If the user is on the current default and only an older dir
+    exists, rename it in place so the existing archive carries over.
+    The chain is checked newest-legacy first so a v0.2.0 user
+    upgrading to v0.3.x rehomes their work directly. Custom
+    ``output.dir`` values are left untouched — that's the user's
+    call.
     """
-    DEFAULT_NEW = "~/.local/share/ai-sessions"
-    LEGACY = "~/.local/share/claude-sessions"
+    DEFAULT_NEW = "~/.local/share/ai-session-capture"
+    LEGACY_DIRS = (
+        "~/.local/share/ai-sessions",     # v0.2.0 / v0.3.0
+        "~/.local/share/claude-sessions",  # pre-v0.2.0
+    )
     if cfg.output.dir != DEFAULT_NEW:
         return
     new_path = Path(DEFAULT_NEW).expanduser()
-    legacy = Path(LEGACY).expanduser()
-    if not new_path.exists() and legacy.exists():
-        legacy.rename(new_path)
+    if new_path.exists():
+        return
+    for raw in LEGACY_DIRS:
+        legacy = Path(raw).expanduser()
+        if legacy.exists():
+            legacy.rename(new_path)
+            return
 
 
 def migrate_archive_to_per_machine(cfg, machine: str) -> None:
