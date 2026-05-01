@@ -19,6 +19,110 @@ layout, FTS rows, MCP results. The machine identity comes from
 data repo safely shareable across multiple hosts — each machine
 writes only under its own subtree.
 
+## The three layers
+
+The pipeline factors cleanly into three layers, each derivable
+from the layer above. Knowing which layer a feature operates on
+is the first question to ask when extending the tool:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ LAYER 1 — sources (raw, read-only, owned by AI tools)    │
+│   ~/.claude/projects/*/*.jsonl       (Claude Code)       │
+│   ~/.codex/sessions/YYYY/MM/DD/*.jsonl  (Codex)          │
+│                                                          │
+│   We never write here. Path-traversal-guarded reads      │
+│   only.                                                  │
+└──────────────────────────────────────────────────────────┘
+           │ parse + redact + render   (cli: backfill / daily)
+           ▼
+┌──────────────────────────────────────────────────────────┐
+│ LAYER 2 — rendered MDs (derived; the canonical archive)  │
+│   ~/.local/share/ai-session-capture/                     │
+│     sessions/<machine>/<source>/<project>/*.md           │
+│     daily/<machine>/<date>.md                            │
+│                                                          │
+│   Human-readable, Obsidian-friendly, redaction baked in. │
+│   YAML frontmatter is the contract — every field needed  │
+│   to reconstruct Layer 3 is there.                       │
+│   This is the layer that travels between machines.       │
+└──────────────────────────────────────────────────────────┘
+           │ index from Layer 2     (cli: search --rebuild)
+           │ index from records     (auto, during backfill/daily)
+           ▼
+┌──────────────────────────────────────────────────────────┐
+│ LAYER 3 — FTS5 search index (derived; local-only cache)  │
+│   ~/.local/state/ai-session-capture/index.db             │
+│     sessions table   (one row per session per date)      │
+│     sessions_fts     (FTS5 virtual table over content)   │
+│                                                          │
+│   Pure cache. Fully reconstructible from Layer 2 alone.  │
+│   `search` and the four MCP tools query *only* this      │
+│   layer — no MD scans, no JSONL re-parses at query time. │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Two ways to populate Layer 3:**
+- During `backfill`/`daily` ingest, Layer 1 → Layer 2 + Layer 3 in
+  one sweep (records flow into both writes simultaneously).
+- Via `search --rebuild`, Layer 2 → Layer 3 only — walks
+  `sessions/**/*.md`, parses YAML frontmatter via
+  `parse_session_md`, builds `SessionIndexRow` per file. This is
+  the path that lets a machine see another machine's captures
+  without needing their JSONLs.
+
+**Layer derivability is the design contract.** Every feature
+should declare which layer it operates on. A feature that secretly
+needs Layer 1 information to operate on Layer 2 breaks the story
+(and breaks multi-machine sync, since other machines won't have
+the JSONLs). The `parse_session_md` helper exists precisely to
+keep this contract: anything Layer 3 needs must land in
+frontmatter on Layer 2, not get re-derived from Layer 1.
+
+## Multi-machine sync model
+
+The three-layer split is what makes multi-machine workflows work
+without special sync-aware code:
+
+| Layer | Sync between machines? | Recipe |
+|---|---|---|
+| Layer 1 (JSONLs) | **No** — each machine has its own AI tools, its own JSONLs. Not shareable; the AI tools own them. |
+| Layer 2 (MDs) | **Yes** — `rsync --exclude='.git/'`, or once #A ships, `git push/pull`. Per-machine subtrees never collide. |
+| Layer 3 (FTS) | **No** — it's a cache. Each machine maintains its own; rebuild from Layer 2 after every sync. |
+
+The canonical consumer-side flow on a machine that just received
+fresh Layer-2 data from another host:
+
+```sh
+# 1. Pull Layer 2 (rsync today, git pull once #A ships)
+asc-pull-pi    # alias for the rsync command
+
+# 2. Reindex Layer 3 from the now-updated Layer 2
+ai-session-capture search --rebuild
+
+# 3. Now search sees the union of all machines whose data is here
+ai-session-capture search "rate limit"                  # all machines
+ai-session-capture search "design" --machine raspberry  # one machine
+```
+
+Folding step 2 into the alias is the right move — there's no
+scenario where you'd want to pull Layer 2 but not refresh Layer 3.
+Cost is sub-second for hundreds of MDs.
+
+**When to rebuild Layer 3:**
+
+| Situation | Rebuild needed? |
+|---|---|
+| `backfill` / `daily` / `migrate-machine` | **Auto** — the command updates Layer 3 in lockstep. |
+| Rsync, `git pull`, manual MD edit | **Manual** — `search --rebuild` walks Layer 2 anew. |
+| Redaction regex changed | **No** — backfill instead. Layer 2 itself needs re-rendering. |
+| Schema migration / DB corruption | **Manual** — `search --rebuild` is also the disaster-recovery path. |
+
+In one sentence: rebuild whenever Layer 2 changed in a way Layer 3
+doesn't already reflect. The tool's own commands keep the layers
+consistent automatically; anything that arrives from outside the
+tool's pipeline triggers a manual rebuild.
+
 ## Pipeline
 
 ```

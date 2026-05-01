@@ -105,13 +105,51 @@ features land. Any new feature should have tests; no test → no ship.
 
 Before proposing a design, check:
 
-- `docs/ARCHITECTURE.md` — the high-level map.
+- `docs/ARCHITECTURE.md` — the high-level map. Includes the
+  three-layer model (sources → MDs → FTS) and the multi-machine
+  sync flow; new features should declare which layer they
+  operate on.
 - `docs/adr/` — numbered decision records. Each ADR captures
   context / decision / rationale / consequences. New non-obvious
   decisions land as new ADRs.
 - `docs/DEFERRED.md` — review findings we consciously didn't act on,
   with reasons.
 - `BACKLOG.md` — prioritized work items.
+- `untracked/LESSONS.md` — practice journal of what surprised /
+  broke / surfaced during the build. Read before tackling
+  related work; append after every significant turn (see below).
+
+## Lesson capture (process rule)
+
+After every turn that produced a real lesson — a design choice that
+surprised, an implementation footgun that surfaced, an operational
+hiccup with a non-obvious cause, an architectural insight worth
+preserving — append it to `untracked/LESSONS.md` using the existing
+**What happened / Root cause / Prevention** structure. Do this in
+the same turn it emerged, not at "release time."
+
+The bar for what counts as a real lesson:
+- It's specific to this codebase or to a tactic that future-you
+  would otherwise repeat.
+- It's actionable — the prevention rule names a concrete check or
+  pattern, not a generic platitude ("test more").
+- A future agent reading the entry could avoid the same misstep
+  without further context.
+
+What does *not* go in LESSONS:
+- Routine bug fixes captured by tests + commit message + CHANGELOG.
+- Decisions whose *why* lives in an ADR (cross-link instead).
+- Per-task TODO state (use the task tools).
+
+Why the discipline matters: lessons captured at release time miss
+context. Lessons captured turn-by-turn keep the journal honest
+about what the practice actually looks like. The file is gitignored
+so honesty is cheap — write what was wrong, not what would look
+good in public.
+
+A lesson lives in `untracked/LESSONS.md`. Public-facing analogues
+land in ADRs (decisions) or CHANGELOG entries (user-facing
+changes). LESSONS.md is the *practice journal*; treat it as such.
 
 ## Common footguns (things we've done wrong before)
 

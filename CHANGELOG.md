@@ -48,6 +48,17 @@ for the design.
   subtree, and update FTS rows in lockstep instead. `--dry-run`
   reports what would change. Refuses to merge if the target
   subtree already exists.
+- **Three-layer architecture documented** in `docs/ARCHITECTURE.md`
+  with a multi-machine sync section explaining which layers
+  travel between hosts (Layer 2 only) and when to rebuild Layer 3
+  (after every external change to Layer 2). Naming the layers
+  (sources / MDs / FTS) makes "which layer does this feature
+  operate on?" the first question for future contributors.
+- **Lesson-capture process rule** added to `AGENTS.md`. After
+  every turn producing a real lesson, append to
+  `untracked/LESSONS.md` using the existing
+  What-happened / Root-cause / Prevention structure. Cross-linked
+  from `untracked/LESSONS.md`'s own header.
 
 ### Changed
 
