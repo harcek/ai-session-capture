@@ -392,3 +392,144 @@ def test_last_error_cleared_on_success(cli_env, fake_projects_root):
     rc = main(["--config", "/nonexistent.toml", "backfill"])
     assert rc == 0
     assert not (state / "last-error").exists()
+
+
+# --- migrate-machine ------------------------------------------------------
+
+
+def _setup_machine_archive(cli_env, projects_root, machine: str = "old-host",
+                           date_iso: str = "2026-04-20"):
+    """Backfill a session under ``machine`` so migrate-machine has work to do."""
+    _seed_session(projects_root, date_iso)
+    cfg_file = cli_env / "machine.toml"
+    cfg_file.write_text(f'[machine]\nname = "{machine}"\n')
+    rc = main(["--config", str(cfg_file), "backfill"])
+    assert rc == 0
+    return cfg_file
+
+
+def test_migrate_machine_renames_paths_and_frontmatter(cli_env, fake_projects_root):
+    """Full happy path: paths move, frontmatter rewritten, FTS rows updated.
+    A subsequent --machine query for the new name returns hits."""
+    cfg_file = _setup_machine_archive(cli_env, fake_projects_root, machine="old-host")
+    base = cli_env / ".local" / "share" / "ai-session-capture"
+    assert (base / "sessions" / "old-host").exists()
+    assert (base / "daily" / "old-host").exists()
+
+    rc = main([
+        "--config", str(cfg_file),
+        "migrate-machine", "old-host", "new-host",
+    ])
+    assert rc == 0
+
+    # Paths moved
+    assert not (base / "sessions" / "old-host").exists()
+    assert not (base / "daily" / "old-host").exists()
+    assert (base / "sessions" / "new-host").exists()
+    assert (base / "daily" / "new-host").exists()
+
+    # Frontmatter rewritten in every MD
+    for md in (base / "sessions" / "new-host").rglob("*.md"):
+        text = md.read_text()
+        assert "machine: new-host" in text
+        assert "machine: old-host" not in text
+        assert "- machine/new-host" in text
+        assert "- machine/old-host" not in text
+
+    # FTS query by --machine new-host returns the migrated session.
+    # Use the search subcommand rather than touching the DB directly so
+    # the test exercises the same path the user does.
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main([
+            "--config", str(cfg_file),
+            "search", "hello", "--machine", "new-host",
+        ])
+    assert rc == 0
+    assert "new-host/claude" in buf.getvalue()
+    # And no hits for the old machine name
+    buf2 = io.StringIO()
+    with contextlib.redirect_stdout(buf2):
+        main([
+            "--config", str(cfg_file),
+            "search", "hello", "--machine", "old-host",
+        ])
+    assert "old-host" not in buf2.getvalue() or "no matches" in buf2.getvalue()
+
+
+def test_migrate_machine_dry_run_touches_nothing(cli_env, fake_projects_root):
+    cfg_file = _setup_machine_archive(cli_env, fake_projects_root, machine="dry-host")
+    base = cli_env / ".local" / "share" / "ai-session-capture"
+    snapshot = {p: p.stat().st_mtime for p in (base / "sessions" / "dry-host").rglob("*.md")}
+
+    rc = main([
+        "--config", str(cfg_file),
+        "migrate-machine", "dry-host", "renamed", "--dry-run",
+    ])
+    assert rc == 0
+
+    # Paths unchanged
+    assert (base / "sessions" / "dry-host").exists()
+    assert not (base / "sessions" / "renamed").exists()
+    # MD mtimes unchanged
+    for p, m in snapshot.items():
+        assert p.stat().st_mtime == m
+
+
+def test_migrate_machine_refuses_existing_target(cli_env, fake_projects_root):
+    """Refuse to merge into an existing target subtree — almost
+    certainly user error, and a silent merge would union content
+    across machines."""
+    cfg_a = _setup_machine_archive(cli_env, fake_projects_root,
+                                   machine="host-a", date_iso="2026-04-20")
+    # Seed a second, separate session under host-b so its subtree
+    # exists too.
+    other = fake_projects_root / "p" / "s2.jsonl"
+    write_jsonl(other, [
+        {
+            "type": "user", "sessionId": "sess2", "uuid": "u3",
+            "timestamp": "2026-04-21T10:00:00.000Z",
+            "isSidechain": False,
+            "message": {"role": "user", "content": "from host-b"},
+        },
+    ])
+    cfg_b = cli_env / "host-b.toml"
+    cfg_b.write_text('[machine]\nname = "host-b"\n')
+    main(["--config", str(cfg_b), "backfill"])
+
+    base = cli_env / ".local" / "share" / "ai-session-capture"
+    assert (base / "sessions" / "host-a").exists()
+    assert (base / "sessions" / "host-b").exists()
+
+    rc = main([
+        "--config", str(cfg_a),
+        "migrate-machine", "host-a", "host-b",
+    ])
+    assert rc == 2
+    # Both subtrees still exist
+    assert (base / "sessions" / "host-a").exists()
+    assert (base / "sessions" / "host-b").exists()
+
+
+def test_migrate_machine_missing_old_is_noop(cli_env):
+    """When no archive exists for the old name, exit 0 with a warning
+    rather than failing — easier to script."""
+    # No backfill, just a config
+    cfg_file = cli_env / "c.toml"
+    cfg_file.write_text('[machine]\nname = "x"\n')
+    rc = main([
+        "--config", str(cfg_file),
+        "migrate-machine", "ghost", "phantom",
+    ])
+    assert rc == 0
+
+
+def test_migrate_machine_same_name_is_noop(cli_env, fake_projects_root):
+    cfg_file = _setup_machine_archive(cli_env, fake_projects_root, machine="same-host")
+    rc = main([
+        "--config", str(cfg_file),
+        "migrate-machine", "same-host", "same-host",
+    ])
+    assert rc == 0

@@ -136,6 +136,12 @@ ai-session-capture search --rebuild                     # walk MDs in data dir, 
 
 # One-off import from an archive / another machine
 ai-session-capture --projects-root /path/to/other/.claude/projects backfill
+
+# Rename this machine's segment in place (paths + frontmatter + FTS rows).
+# Use this instead of wipe-and-rebackfill when source JSONLs may have
+# been pruned and you can't afford to lose those sessions.
+ai-session-capture migrate-machine OLD NEW --dry-run    # preview
+ai-session-capture migrate-machine OLD NEW              # do it
 ```
 
 ## Wire into Claude Code as an MCP server

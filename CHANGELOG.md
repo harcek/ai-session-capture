@@ -40,6 +40,14 @@ for the design.
   YAML frontmatter into `SessionIndexRow`. After `git pull` brings
   in another machine's MDs, `--rebuild` indexes them — no JSONL
   needed.
+- **`migrate-machine OLD NEW` subcommand** for renaming a machine
+  in place across paths, frontmatter, and FTS. Useful when source
+  JSONLs may have been pruned (Claude Code / Codex retention,
+  manual cleanup, disk pressure) — wipe-and-rebackfill would lose
+  those sessions, so we rewrite frontmatter, move the per-machine
+  subtree, and update FTS rows in lockstep instead. `--dry-run`
+  reports what would change. Refuses to merge if the target
+  subtree already exists.
 
 ### Changed
 

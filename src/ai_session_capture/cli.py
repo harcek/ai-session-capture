@@ -10,8 +10,10 @@ aids; they never touch disk.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -38,6 +40,7 @@ from .render import (
     resolve_tz,
 )
 from .state import (
+    atomic_write_text,
     clear_last_error,
     flock_exclusive,
     migrate_archive_to_per_machine,
@@ -436,6 +439,143 @@ def cmd_search(args, cfg: Config, logger: logging.Logger) -> int:
     return 0
 
 
+def cmd_migrate_machine(args, cfg: Config, logger: logging.Logger) -> int:
+    """Rename a machine in place across paths, frontmatter, and FTS.
+
+    Without this, changing ``[machine].name`` and re-running
+    ``backfill`` either leaks orphan subtrees from the old name or
+    requires a wipe-and-rebackfill, which silently loses any session
+    whose JSONL has since been pruned. This subcommand is the only
+    way to rename a machine while preserving sessions whose source
+    JSONLs may no longer exist on disk.
+    """
+    old = args.old
+    new = args.new
+    if old == new:
+        logger.info("nothing to do — old and new machine names match")
+        return 0
+
+    output = Path(cfg.output.dir).expanduser()
+    sessions_old = output / "sessions" / old
+    sessions_new = output / "sessions" / new
+    daily_old = output / "daily" / old
+    daily_new = output / "daily" / new
+
+    if not sessions_old.exists() and not daily_old.exists():
+        logger.warning("no archive subtree found for machine %r at %s", old, output)
+        return 0
+
+    # Refuse to merge — the user almost certainly didn't mean it, and
+    # merging would silently union per-session content.
+    if sessions_new.exists():
+        logger.error(
+            "target sessions/%s already exists; refusing to merge. "
+            "Move or remove the existing subtree first.", new,
+        )
+        return 2
+    if daily_new.exists():
+        logger.error(
+            "target daily/%s already exists; refusing to merge.", new,
+        )
+        return 2
+
+    mds: list[Path] = []
+    if sessions_old.exists():
+        mds.extend(sessions_old.rglob("*.md"))
+    if daily_old.exists():
+        mds.extend(daily_old.rglob("*.md"))
+
+    if args.dry_run:
+        logger.info(
+            "dry-run: would rewrite machine field in %d MDs and rename "
+            "sessions/%s → sessions/%s + daily/%s → daily/%s",
+            len(mds), old, new, old, new,
+        )
+        return 0
+
+    # Frontmatter: rewrite the canonical `machine: <old>` line and the
+    # `- machine/<old>` tag entry. Both must move in lockstep with the
+    # filesystem move — the from-disk FTS rebuild reads frontmatter as
+    # truth.
+    machine_line = re.compile(r"^machine: " + re.escape(old) + r"$", re.MULTILINE)
+    machine_tag = re.compile(r"^(\s+- machine/)" + re.escape(old) + r"$", re.MULTILINE)
+    rewritten = 0
+    skipped = 0
+    for md in mds:
+        text = md.read_text(encoding="utf-8")
+        new_text = machine_line.sub(f"machine: {new}", text)
+        new_text = machine_tag.sub(rf"\g<1>{new}", new_text)
+        if new_text != text:
+            atomic_write_text(md, new_text)
+            rewritten += 1
+        else:
+            # MD pre-dates v0.3.0 frontmatter (no `machine:` line) — moving
+            # the file is fine, but it won't be discoverable via `--machine`
+            # filters until re-rendered from JSONL.
+            logger.warning("no machine field in %s — moving without rewrite", md)
+            skipped += 1
+
+    # Filesystem move — happens after frontmatter rewrite so a partial
+    # failure leaves a coherent state at the old path.
+    if sessions_old.exists():
+        sessions_old.rename(sessions_new)
+    if daily_old.exists():
+        daily_old.rename(daily_new)
+
+    # FTS: UPDATE the regular sessions table (in-place column update is
+    # supported); for the FTS5 virtual table, follow the project's
+    # established DELETE+INSERT idiom (see search.upsert_rows) so we
+    # don't tickle UNINDEXED-column UPDATE semantics across SQLite
+    # versions.
+    fts_rows_updated = 0
+    with search_mod.connect() as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET machine = ? WHERE machine = ?",
+            (new, old),
+        )
+        fts_rows_updated = cur.rowcount
+
+        rows = conn.execute(
+            "SELECT session_id, date, source, project, content "
+            "FROM sessions_fts WHERE machine = ?",
+            (old,),
+        ).fetchall()
+        conn.execute("DELETE FROM sessions_fts WHERE machine = ?", (old,))
+        for r in rows:
+            conn.execute(
+                "INSERT INTO sessions_fts "
+                "(session_id, date, source, machine, project, content) "
+                "VALUES (?,?,?,?,?,?)",
+                (r["session_id"], r["date"], r["source"], new, r["project"], r["content"]),
+            )
+
+    # cursor.json keys are relative paths; entries containing the old
+    # machine segment are now stale (the file at that relpath is gone).
+    # Drop them so a subsequent backfill writes fresh entries against
+    # the new paths instead of treating the new files as never-seen
+    # (which is harmless but wastes a hash compute).
+    cursor_path = state_dir() / "cursor.json"
+    if cursor_path.exists():
+        try:
+            cursor = json.loads(cursor_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            cursor = {}
+        old_seg = f"/{old}/"
+        cleaned = {k: v for k, v in cursor.items() if old_seg not in k}
+        if len(cleaned) != len(cursor):
+            atomic_write_text(
+                cursor_path,
+                json.dumps(cleaned, indent=2, sort_keys=True),
+            )
+
+    logger.info(
+        "migrated machine %r → %r: %d MDs rewritten, %d MDs skipped (no machine field), "
+        "%d FTS rows updated",
+        old, new, rewritten, skipped, fts_rows_updated,
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ai-session-capture",
@@ -526,6 +666,18 @@ def build_parser() -> argparse.ArgumentParser:
              "data dir (no QUERY needed)",
     )
 
+    mm = sub.add_parser(
+        "migrate-machine",
+        help="rename a machine in place across paths, frontmatter, and FTS",
+    )
+    mm.add_argument("old", help="current machine segment, e.g. `openclaw-egik`")
+    mm.add_argument("new", help="desired machine segment, e.g. `mbp`")
+    mm.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would change; touch nothing",
+    )
+
     sub.add_parser(
         "mcp-serve",
         help="run the MCP server over stdio (wire into Claude Code settings)",
@@ -579,6 +731,8 @@ def main(argv: list[str] | None = None) -> int:
                 rc = cmd_backfill(args, cfg, logger)
             elif args.cmd == "search":
                 rc = cmd_search(args, cfg, logger)
+            elif args.cmd == "migrate-machine":
+                rc = cmd_migrate_machine(args, cfg, logger)
             else:  # pragma: no cover — argparse enforces subcommand presence
                 rc = 2
     except KeyboardInterrupt:
